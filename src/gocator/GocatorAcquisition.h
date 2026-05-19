@@ -34,6 +34,29 @@ struct GocatorImageFrame
     std::vector<std::uint8_t> pixels;
 };
 
+struct GocatorProfilePoint
+{
+    double x = 0.0;
+    double z = 0.0;
+    std::uint16_t intensity = 0;
+    bool valid = false;
+};
+
+struct GocatorProfileFrame
+{
+    std::string sourceId;
+    std::uint64_t dataSetId = 0;
+    std::uint16_t gdpId = 0;
+    std::uint32_t width = 0;
+    std::uint32_t intensityWidth = 0;
+    double xResolution = 0.0;
+    double zResolution = 0.0;
+    double xOffset = 0.0;
+    double zOffset = 0.0;
+    std::size_t validCount = 0;
+    std::vector<GocatorProfilePoint> points;
+};
+
 struct GocatorFrameMessage
 {
     std::string typeName;
@@ -49,6 +72,7 @@ struct GocatorFrame
     std::size_t messageCount = 0;
     std::vector<GocatorFrameMessage> messages;
     std::vector<GocatorImageFrame> images;
+    std::vector<GocatorProfileFrame> profiles;
 };
 
 class GocatorAcquisition
@@ -76,6 +100,8 @@ private:
     static GocatorFrame frameFromDataSet(const GoPxLSdk::GoDataSet& dataSet);
     static GocatorFrameMessage messageInfo(const GoPxLSdk::GoGdpMsg& message);
     static GocatorImageFrame imageFrame(const GoPxLSdk::GoGdpImage& image);
+    static GocatorProfileFrame uniformProfileFrame(const GoPxLSdk::GoGdpMsg& message);
+    static GocatorProfileFrame pointCloudProfileFrame(const GoPxLSdk::GoGdpMsg& message);
 
     GocatorConnection connection_;
     std::unique_ptr<GoPxLSdk::GoGdpClient> gdpClient_;

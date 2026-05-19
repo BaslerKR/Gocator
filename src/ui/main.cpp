@@ -1,4 +1,5 @@
 #include <chrono>
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <functional>
@@ -23,6 +24,7 @@
 #include <QMainWindow>
 #include <QPlainTextEdit>
 #include <QPixmap>
+#include <QPainter>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTableWidget>
@@ -87,7 +89,8 @@ std::string frameText(const gocator::GocatorFrame& frame)
 {
     std::ostringstream out;
     out << "messages=" << frame.messageCount << '\n'
-        << "images=" << frame.images.size();
+        << "images=" << frame.images.size() << '\n'
+        << "profiles=" << frame.profiles.size();
 
     for (const gocator::GocatorFrameMessage& message : frame.messages)
     {
@@ -109,6 +112,17 @@ std::string frameText(const gocator::GocatorFrame& frame)
             << " format=" << image.pixelFormatName
             << " bytes=" << image.dataSize
             << " source=" << image.sourceId;
+    }
+
+    for (const gocator::GocatorProfileFrame& profile : frame.profiles)
+    {
+        out << '\n'
+            << "profile "
+            << "points=" << profile.width
+            << " valid=" << profile.validCount
+            << " xRes=" << profile.xResolution
+            << " zRes=" << profile.zResolution
+            << " source=" << profile.sourceId;
     }
 
     return out.str();
@@ -179,6 +193,92 @@ QImage imagePreview(const gocator::GocatorImageFrame& frame)
     }
 
     return {};
+}
+
+QImage profilePreview(const gocator::GocatorProfileFrame& profile, QSize size)
+{
+    const int width = std::max(320, size.width());
+    const int height = std::max(220, size.height());
+    QImage image(width, height, QImage::Format_RGB32);
+    image.fill(QColor(24, 24, 24));
+
+    if (profile.validCount == 0)
+    {
+        return image;
+    }
+
+    double minX = 0.0;
+    double maxX = 0.0;
+    double minZ = 0.0;
+    double maxZ = 0.0;
+    bool first = true;
+
+    for (const gocator::GocatorProfilePoint& point : profile.points)
+    {
+        if (!point.valid)
+        {
+            continue;
+        }
+
+        if (first)
+        {
+            minX = maxX = point.x;
+            minZ = maxZ = point.z;
+            first = false;
+        }
+        else
+        {
+            minX = std::min(minX, point.x);
+            maxX = std::max(maxX, point.x);
+            minZ = std::min(minZ, point.z);
+            maxZ = std::max(maxZ, point.z);
+        }
+    }
+
+    if (maxX <= minX)
+    {
+        maxX = minX + 1.0;
+    }
+    if (maxZ <= minZ)
+    {
+        maxZ = minZ + 1.0;
+    }
+
+    constexpr int margin = 20;
+    const double plotWidth = static_cast<double>(width - margin * 2);
+    const double plotHeight = static_cast<double>(height - margin * 2);
+
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(QColor(80, 80, 80), 1));
+    painter.drawRect(margin, margin, width - margin * 2, height - margin * 2);
+
+    painter.setPen(QPen(QColor(0, 210, 170), 2));
+    QPoint previous;
+    bool hasPrevious = false;
+
+    for (const gocator::GocatorProfilePoint& point : profile.points)
+    {
+        if (!point.valid)
+        {
+            hasPrevious = false;
+            continue;
+        }
+
+        const int x = margin + static_cast<int>((point.x - minX) / (maxX - minX) * plotWidth);
+        const int y = height - margin - static_cast<int>((point.z - minZ) / (maxZ - minZ) * plotHeight);
+        const QPoint current(x, y);
+        if (hasPrevious)
+        {
+            painter.drawLine(previous, current);
+        }
+        previous = current;
+        hasPrevious = true;
+    }
+
+    painter.setPen(QColor(220, 220, 220));
+    painter.drawText(12, 16, QString("valid %1 / %2").arg(profile.validCount).arg(profile.width));
+    return image;
 }
 
 void setStatus(QLabel& state, QLabel& endpoint, QLabel& gdp, bool connected, const QString& endpointText)
@@ -400,9 +500,10 @@ int main(int argc, char** argv)
         {
             const std::string text = frameText(result.frame);
             acquisitionInfoEdit->setPlainText(toQString(text));
-            frameValue->setText(QString("messages=%1 images=%2")
+            frameValue->setText(QString("messages=%1 images=%2 profiles=%3")
                 .arg(result.frame.messageCount)
-                .arg(result.frame.images.size()));
+                .arg(result.frame.images.size())
+                .arg(result.frame.profiles.size()));
 
             if (!result.frame.images.empty())
             {
@@ -419,9 +520,14 @@ int main(int argc, char** argv)
                     imagePreviewLabel->setText("Image format not previewed");
                 }
             }
+            else if (!result.frame.profiles.empty())
+            {
+                const QImage preview = profilePreview(result.frame.profiles.front(), imagePreviewLabel->size());
+                imagePreviewLabel->setPixmap(QPixmap::fromImage(preview));
+            }
             else
             {
-                imagePreviewLabel->setText("No image in frame");
+                imagePreviewLabel->setText("No image/profile in frame");
             }
         }
     };

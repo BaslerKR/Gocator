@@ -46,4 +46,4 @@ No-argument execution is the CLion smoke path: it tries SDK discovery first, the
 
 `profile-output`은 장비를 정지 가능한 상태로 만든 뒤 profile mode, Gocator Protocol, GDP output만 설정함.
 
-The debug UI can connect, inspect scanner info, configure one GDP output source, and grab one frame. Image preview is available for common grayscale/RGB image payloads.
+The debug UI can connect, inspect scanner info, configure one GDP output source, and grab one frame. Preview is available for common grayscale/RGB image payloads and profile payloads.

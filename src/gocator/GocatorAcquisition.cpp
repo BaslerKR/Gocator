@@ -8,7 +8,10 @@
 #include <GoPxLSdk/GoGdpClient.h>
 #include <GoPxLSdk/GoGdpMsg/GoGdpImage.h>
 #include <GoPxLSdk/GoGdpMsg/GoGdpPixelFormat.h>
+#include <GoPxLSdk/GoGdpMsg/GoGdpProfilePointCloud.h>
+#include <GoPxLSdk/GoGdpMsg/GoGdpProfileUniform.h>
 #include <GoPxLSdk/GoSystem.h>
+#include <kApi/Data/kArray1.h>
 #include <kApi/Data/kArray2.h>
 
 namespace gocator
@@ -193,6 +196,14 @@ GocatorFrame GocatorAcquisition::frameFromDataSet(const GoPxLSdk::GoDataSet& dat
         {
             frame.images.push_back(imageFrame(static_cast<const GoPxLSdk::GoGdpImage&>(message)));
         }
+        else if (message.Type() == GoPxLSdk::MessageType::UNIFORM_PROFILE)
+        {
+            frame.profiles.push_back(uniformProfileFrame(message));
+        }
+        else if (message.Type() == GoPxLSdk::MessageType::PROFILE_POINT_CLOUD)
+        {
+            frame.profiles.push_back(pointCloudProfileFrame(message));
+        }
     }
 
     return frame;
@@ -231,6 +242,92 @@ GocatorImageFrame GocatorAcquisition::imageFrame(const GoPxLSdk::GoGdpImage& ima
         {
             frame.pixels.resize(frame.dataSize);
             std::memcpy(frame.pixels.data(), source, frame.dataSize);
+        }
+    }
+
+    return frame;
+}
+
+GocatorProfileFrame GocatorAcquisition::uniformProfileFrame(const GoPxLSdk::GoGdpMsg& message)
+{
+    const auto& profile = static_cast<const GoPxLSdk::GoGdpProfileUniform&>(message);
+
+    GocatorProfileFrame frame;
+    frame.sourceId = profile.DataSourceId();
+    frame.dataSetId = profile.DataSetId();
+    frame.gdpId = profile.GdpId();
+    frame.width = profile.Width();
+    frame.intensityWidth = profile.IntensityWidth();
+    frame.xResolution = profile.Resolution().x;
+    frame.zResolution = profile.Resolution().z;
+    frame.xOffset = profile.Offset().x;
+    frame.zOffset = profile.Offset().z;
+    frame.points.resize(frame.width);
+
+    const kArray1 ranges = profile.Ranges();
+    const kArray1 intensities = profile.Intensities();
+    for (std::uint32_t i = 0; i < frame.width; ++i)
+    {
+        k16s range = k16S_NULL;
+        kArray1_Item(ranges, i, &range);
+
+        GocatorProfilePoint& point = frame.points[i];
+        point.x = frame.xOffset + frame.xResolution * i;
+        if (range != k16S_NULL)
+        {
+            point.z = frame.zOffset + frame.zResolution * range;
+            point.valid = true;
+            ++frame.validCount;
+        }
+
+        if (intensities != kNULL && i < frame.intensityWidth)
+        {
+            k16u intensity = 0;
+            kArray1_Item(intensities, i, &intensity);
+            point.intensity = intensity;
+        }
+    }
+
+    return frame;
+}
+
+GocatorProfileFrame GocatorAcquisition::pointCloudProfileFrame(const GoPxLSdk::GoGdpMsg& message)
+{
+    const auto& profile = static_cast<const GoPxLSdk::GoGdpProfilePointCloud&>(message);
+
+    GocatorProfileFrame frame;
+    frame.sourceId = profile.DataSourceId();
+    frame.dataSetId = profile.DataSetId();
+    frame.gdpId = profile.GdpId();
+    frame.width = profile.Width();
+    frame.intensityWidth = profile.IntensityWidth();
+    frame.xResolution = profile.Resolution().x;
+    frame.zResolution = profile.Resolution().z;
+    frame.xOffset = profile.Offset().x;
+    frame.zOffset = profile.Offset().z;
+    frame.points.resize(frame.width);
+
+    const kArray1 ranges = profile.Ranges();
+    const kArray1 intensities = profile.Intensities();
+    for (std::uint32_t i = 0; i < frame.width; ++i)
+    {
+        kPoint16s source = {k16S_NULL, k16S_NULL};
+        kArray1_Item(ranges, i, &source);
+
+        GocatorProfilePoint& point = frame.points[i];
+        if (source.x != k16S_NULL && source.y != k16S_NULL)
+        {
+            point.x = frame.xOffset + frame.xResolution * source.x;
+            point.z = frame.zOffset + frame.zResolution * source.y;
+            point.valid = true;
+            ++frame.validCount;
+        }
+
+        if (intensities != kNULL && i < frame.intensityWidth)
+        {
+            k16u intensity = 0;
+            kArray1_Item(intensities, i, &intensity);
+            point.intensity = intensity;
         }
     }
 

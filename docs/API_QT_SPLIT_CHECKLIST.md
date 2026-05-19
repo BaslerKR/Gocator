@@ -22,6 +22,7 @@
 - [x] Qt Widgets debug UI shell: discovery, connect info, resource read, profile output.
 - [x] `GocatorAcquisition` 추가: GDP connect/start/receive/stop, image metadata/pixel copy.
 - [x] Qt debug UI 개선: connection status, scanner info, output source, single grab, image preview.
+- [x] GDP profile preview 추가: uniform/profile point cloud metadata, valid point line plot.
 - [ ] `GocatorSettingsCatalog` 추가: schema 기반 writable/min/max/enum 추출.
 - [ ] `GocatorScanSettings` 추가: scanner detect, scan mode, intensity, spacing.
 - [ ] `GocatorOutputSettings` 추가: protocol enable, output clear/add, source 선택.
