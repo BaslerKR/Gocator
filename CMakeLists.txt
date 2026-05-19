@@ -8,6 +8,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_MACOSX_RPATH ON)
 
 set(GOPXL_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/GoPxL-SDK" CACHE PATH "GoPxL SDK root")
+set(GOCATOR_DEFAULT_QT_PREFIX "/opt/Qt/6.7.2/gcc_64" CACHE PATH "Default Qt prefix")
+option(GOCATOR_BUILD_QT_UI "Build Qt Widgets debug UI when Qt is available" ON)
+
+if(GOCATOR_BUILD_QT_UI AND NOT CMAKE_PREFIX_PATH AND EXISTS "${GOCATOR_DEFAULT_QT_PREFIX}")
+    list(APPEND CMAKE_PREFIX_PATH "${GOCATOR_DEFAULT_QT_PREFIX}")
+endif()
 
 add_library(gocator_core
     src/gocator/GocatorConnection.cpp
@@ -46,7 +52,32 @@ target_link_libraries(gocator_settings
         gocator_core
 )
 
-foreach(target gocator_core gocator_settings)
+set(gocator_runtime_targets
+    gocator_core
+    gocator_settings
+)
+
+if(GOCATOR_BUILD_QT_UI)
+    find_package(Qt6 QUIET COMPONENTS Widgets)
+
+    if(Qt6_FOUND)
+        add_executable(gocator_debug_ui
+            src/ui/main.cpp
+        )
+
+        target_link_libraries(gocator_debug_ui
+            PRIVATE
+                gocator_core
+                Qt6::Widgets
+        )
+
+        list(APPEND gocator_runtime_targets gocator_debug_ui)
+    else()
+        message(STATUS "Qt6 Widgets not found; skipping gocator_debug_ui")
+    endif()
+endif()
+
+foreach(target ${gocator_runtime_targets})
     set_target_properties(${target} PROPERTIES
         BUILD_RPATH "${GOPXL_SDK_DIR}/lib"
         INSTALL_RPATH "@executable_path/../GoPxL-SDK/lib"

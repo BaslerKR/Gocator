@@ -19,6 +19,7 @@
 - [x] CLion no-arg smoke path: SDK discovery first, manual `192.168.1.10` info fallback.
 - [x] `GocatorConnection` 추가: connect/disconnect/start/stop/port/timeout.
 - [x] `GocatorResourceClient` 추가: read/update/call/schema/child URI.
+- [x] Qt Widgets debug UI shell: discovery, connect info, resource read, profile output.
 - [ ] `GocatorSettingsCatalog` 추가: schema 기반 writable/min/max/enum 추출.
 - [ ] `GocatorScanSettings` 추가: scanner detect, scan mode, intensity, spacing.
 - [ ] `GocatorOutputSettings` 추가: protocol enable, output clear/add, source 선택.
