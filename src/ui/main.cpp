@@ -120,9 +120,25 @@ std::string frameText(const gocator::GocatorFrame& frame)
             << "profile "
             << "points=" << profile.width
             << " valid=" << profile.validCount
+            << " null=" << profile.nullCount
             << " xRes=" << profile.xResolution
             << " zRes=" << profile.zResolution
             << " source=" << profile.sourceId;
+
+        if (profile.hasRangeStats)
+        {
+            out << " range[first,min,max]="
+                << profile.firstRange << ","
+                << profile.minRange << ","
+                << profile.maxRange;
+        }
+
+        if (profile.hasIntensityStats)
+        {
+            out << " intensity[min,max]="
+                << profile.minIntensity << ","
+                << profile.maxIntensity;
+        }
     }
 
     return out.str();
@@ -370,6 +386,9 @@ int main(int argc, char** argv)
     receiveTimeoutSpin->setRange(100, 120000);
     receiveTimeoutSpin->setValue(10000);
     receiveTimeoutSpin->setSingleStep(1000);
+    auto* frameCountSpin = new QSpinBox(acquisitionBox);
+    frameCountSpin->setRange(1, 200);
+    frameCountSpin->setValue(10);
     auto* profileButton = new QPushButton("Profile Output", acquisitionBox);
     auto* setOutputButton = new QPushButton("Set Output", acquisitionBox);
     auto* grabButton = new QPushButton("Grab One", acquisitionBox);
@@ -378,6 +397,8 @@ int main(int argc, char** argv)
     acquisitionControlsLayout->addWidget(outputSourceEdit, 4);
     acquisitionControlsLayout->addWidget(new QLabel("Receive ms", acquisitionControls));
     acquisitionControlsLayout->addWidget(receiveTimeoutSpin, 1);
+    acquisitionControlsLayout->addWidget(new QLabel("Frames", acquisitionControls));
+    acquisitionControlsLayout->addWidget(frameCountSpin, 1);
     acquisitionControlsLayout->addWidget(profileButton);
     acquisitionControlsLayout->addWidget(setOutputButton);
     acquisitionControlsLayout->addWidget(grabButton);
@@ -754,10 +775,11 @@ int main(int argc, char** argv)
         }
 
         const int receiveTimeoutMs = receiveTimeoutSpin->value();
-        runOperation("Grab One", [config = *config, receiveTimeoutMs] {
+        const int frameCount = frameCountSpin->value();
+        runOperation("Grab One", [config = *config, receiveTimeoutMs, frameCount] {
             gocator::GocatorAcquisition acquisition(config);
             OperationResult result;
-            result.frame = acquisition.grabOne(receiveTimeoutMs);
+            result.frame = acquisition.grabUntilValidProfile(receiveTimeoutMs, frameCount);
             result.hasFrame = true;
             result.ok = true;
             result.message = frameText(result.frame);

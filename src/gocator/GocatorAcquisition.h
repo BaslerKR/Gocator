@@ -54,6 +54,14 @@ struct GocatorProfileFrame
     double xOffset = 0.0;
     double zOffset = 0.0;
     std::size_t validCount = 0;
+    std::size_t nullCount = 0;
+    bool hasRangeStats = false;
+    std::int32_t minRange = 0;
+    std::int32_t maxRange = 0;
+    std::int32_t firstRange = 0;
+    bool hasIntensityStats = false;
+    std::uint16_t minIntensity = 0;
+    std::uint16_t maxIntensity = 0;
     std::vector<GocatorProfilePoint> points;
 };
 
@@ -95,6 +103,7 @@ public:
 
     GocatorFrame receiveOne(int timeoutMs);
     GocatorFrame grabOne(int timeoutMs, bool stopAfterReceive = true);
+    GocatorFrame grabUntilValidProfile(int timeoutMs, int maxFrames, bool stopAfterReceive = true);
 
 private:
     static GocatorFrame frameFromDataSet(const GoPxLSdk::GoDataSet& dataSet);

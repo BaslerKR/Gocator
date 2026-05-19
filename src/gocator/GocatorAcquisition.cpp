@@ -1,5 +1,6 @@
 #include "gocator/GocatorAcquisition.h"
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
@@ -181,6 +182,57 @@ GocatorFrame GocatorAcquisition::grabOne(int timeoutMs, bool stopAfterReceive)
     }
 }
 
+GocatorFrame GocatorAcquisition::grabUntilValidProfile(int timeoutMs, int maxFrames, bool stopAfterReceive)
+{
+    connect();
+    start();
+
+    try
+    {
+        GocatorFrame lastFrame;
+        const int frameCount = std::max(1, maxFrames);
+        for (int i = 0; i < frameCount; ++i)
+        {
+            lastFrame = receiveOne(timeoutMs);
+
+            if (!lastFrame.images.empty())
+            {
+                if (stopAfterReceive)
+                {
+                    stopNoThrow();
+                }
+                return lastFrame;
+            }
+
+            for (const GocatorProfileFrame& profile : lastFrame.profiles)
+            {
+                if (profile.validCount > 0)
+                {
+                    if (stopAfterReceive)
+                    {
+                        stopNoThrow();
+                    }
+                    return lastFrame;
+                }
+            }
+        }
+
+        if (stopAfterReceive)
+        {
+            stopNoThrow();
+        }
+        return lastFrame;
+    }
+    catch (...)
+    {
+        if (stopAfterReceive)
+        {
+            stopNoThrow();
+        }
+        throw;
+    }
+}
+
 GocatorFrame GocatorAcquisition::frameFromDataSet(const GoPxLSdk::GoDataSet& dataSet)
 {
     GocatorFrame frame;
@@ -270,6 +322,18 @@ GocatorProfileFrame GocatorAcquisition::uniformProfileFrame(const GoPxLSdk::GoGd
     {
         k16s range = k16S_NULL;
         kArray1_Item(ranges, i, &range);
+        if (i == 0)
+        {
+            frame.firstRange = range;
+            frame.minRange = range;
+            frame.maxRange = range;
+            frame.hasRangeStats = true;
+        }
+        else
+        {
+            frame.minRange = std::min(frame.minRange, static_cast<std::int32_t>(range));
+            frame.maxRange = std::max(frame.maxRange, static_cast<std::int32_t>(range));
+        }
 
         GocatorProfilePoint& point = frame.points[i];
         point.x = frame.xOffset + frame.xResolution * i;
@@ -279,12 +343,27 @@ GocatorProfileFrame GocatorAcquisition::uniformProfileFrame(const GoPxLSdk::GoGd
             point.valid = true;
             ++frame.validCount;
         }
+        else
+        {
+            ++frame.nullCount;
+        }
 
         if (intensities != kNULL && i < frame.intensityWidth)
         {
             k16u intensity = 0;
             kArray1_Item(intensities, i, &intensity);
             point.intensity = intensity;
+            if (!frame.hasIntensityStats)
+            {
+                frame.minIntensity = intensity;
+                frame.maxIntensity = intensity;
+                frame.hasIntensityStats = true;
+            }
+            else
+            {
+                frame.minIntensity = std::min(frame.minIntensity, static_cast<std::uint16_t>(intensity));
+                frame.maxIntensity = std::max(frame.maxIntensity, static_cast<std::uint16_t>(intensity));
+            }
         }
     }
 
@@ -313,6 +392,18 @@ GocatorProfileFrame GocatorAcquisition::pointCloudProfileFrame(const GoPxLSdk::G
     {
         kPoint16s source = {k16S_NULL, k16S_NULL};
         kArray1_Item(ranges, i, &source);
+        if (i == 0)
+        {
+            frame.firstRange = source.y;
+            frame.minRange = source.y;
+            frame.maxRange = source.y;
+            frame.hasRangeStats = true;
+        }
+        else
+        {
+            frame.minRange = std::min(frame.minRange, static_cast<std::int32_t>(source.y));
+            frame.maxRange = std::max(frame.maxRange, static_cast<std::int32_t>(source.y));
+        }
 
         GocatorProfilePoint& point = frame.points[i];
         if (source.x != k16S_NULL && source.y != k16S_NULL)
@@ -322,12 +413,27 @@ GocatorProfileFrame GocatorAcquisition::pointCloudProfileFrame(const GoPxLSdk::G
             point.valid = true;
             ++frame.validCount;
         }
+        else
+        {
+            ++frame.nullCount;
+        }
 
         if (intensities != kNULL && i < frame.intensityWidth)
         {
             k16u intensity = 0;
             kArray1_Item(intensities, i, &intensity);
             point.intensity = intensity;
+            if (!frame.hasIntensityStats)
+            {
+                frame.minIntensity = intensity;
+                frame.maxIntensity = intensity;
+                frame.hasIntensityStats = true;
+            }
+            else
+            {
+                frame.minIntensity = std::min(frame.minIntensity, static_cast<std::uint16_t>(intensity));
+                frame.maxIntensity = std::max(frame.maxIntensity, static_cast<std::uint16_t>(intensity));
+            }
         }
     }
 
