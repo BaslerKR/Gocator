@@ -6,6 +6,7 @@
 #include <GoPxLSdk/GoGdpClient.h>
 #include <GoPxLSdk/GoInstance.h>
 #include <GoPxLSdk/GoJson.h>
+#include <GoPxLSdk/GoResource.h>
 #include <GoPxLSdk/GoSystem.h>
 #include <kApi/Io/kNetwork.h>
 #include <kApi/kApiDef.h>
@@ -16,6 +17,7 @@
 #include <iostream>
 
 #include "gocator/GocatorAcquisition.h"
+#include "gocator/GocatorDiscovery.h"
 
 namespace
 {
@@ -129,6 +131,18 @@ struct Gocator::Impl
     std::atomic<bool> isOpened{false};
     std::atomic<bool> isGrabbing{false};
 
+    std::string getScannerPath() const
+    {
+        if (!system) return "";
+        const std::string engineId = detectEngineId(*system);
+        return "/scan/engines/" + engineId + "/scanners/scanner-0";
+    }
+
+    std::string getSensorPath() const
+    {
+        return getScannerPath() + "/sensors/sensor-0";
+    }
+
     std::mutex statusMutex;
     std::unordered_map<size_t, StatusCallback> statusObservers;
     std::atomic<size_t> nextStatusObserverId{1};
@@ -223,27 +237,73 @@ struct Gocator::Impl
         }
     }
 
-    void configure(double scanLengthMm, bool configureProfile)
+    void configure(double scanLengthMm, ScanMode mode, bool intensityEnabled, bool uniformSpacingEnabled, int exposureUs)
     {
         if (!isOpened.load()) return;
 
-        if (configureProfile)
-        {
-            configureProfileOutput(*system, 30000);
-        }
-        else
-        {
-            enableGocatorProtocol(*system, 30000);
-        }
-        
         try
         {
             const std::string engineId = detectEngineId(*system);
-            const std::string areaPath = "/scan/engines/" + engineId + "/scanners/scanner-0";
-            system->Client().Update(areaPath, GoPxLSdk::GoJson(R"({"parameters":{"scanModeSettings":{"scanLengthMm":)" + std::to_string(scanLengthMm) + R"(}}})"))
-                           .CheckResponse(30000);
+            const std::string scannerPath = "/scan/engines/" + engineId + "/scanners/scanner-0";
+            const std::string sensorPath = scannerPath + "/sensors/sensor-0";
+
+            // 1. Scan Mode, Intensity, Uniform Spacing 적용
+            int sdkScanMode = 2; // Default Profile
+            if (mode == ScanMode::SurfaceMode)
+            {
+                sdkScanMode = 3; // Surface
+            }
+
+            std::string payload = R"({"parameters":{"scanModeSettings":{)"
+                                  R"("scanMode":)" + std::to_string(sdkScanMode) + R"(,)"
+                                  R"("intensityEnabled":)" + (intensityEnabled ? "true" : "false") + R"(,)"
+                                  R"("uniformSpacingEnabled":)" + (uniformSpacingEnabled ? "true" : "false") +
+                                  R"(}}})";
+            system->Client().Update(scannerPath, GoPxLSdk::GoJson(payload)).CheckResponse(30000);
+
+            // 2. Exposure 적용
+            std::string exposurePayload = R"({"parameters":{"exposureSettings":{)"
+                                          R"("exposureMode":0,)"
+                                          R"("singleExposure":)" + std::to_string(exposureUs) +
+                                          R"(}}})";
+            system->Client().Update(sensorPath, GoPxLSdk::GoJson(exposurePayload)).CheckResponse(30000);
+
+            // 3. Scan Length 적용
+            std::string scanLengthPayload = R"({"parameters":{"scanModeSettings":{"scanLengthMm":)" + std::to_string(scanLengthMm) + R"(}}})";
+            system->Client().Update(scannerPath, GoPxLSdk::GoJson(scanLengthPayload)).CheckResponse(30000);
+
+            // 4. Gocator protocol 활성화 및 Output 구성
+            enableGocatorProtocol(*system, 30000);
+
+            // Remove outputs
+            try
+            {
+                system->Client().Call(GOCATOR_REMOVE_ALL_OUTPUT_PATH, GoPxLSdk::GoJson("{}")).CheckResponse(30000);
+            }
+            catch (...) {}
+
+            // Add output
+            std::string sourceId;
+            if (mode == ScanMode::SurfaceMode)
+            {
+                sourceId = (engineId == "LMIConfocalLineProfiler")
+                    ? "scan:" + engineId + ":scanner-0:topUniformSurfaceLayer0"
+                    : "scan:" + engineId + ":scanner-0:topUniformSurface";
+            }
+            else
+            {
+                sourceId = (engineId == "LMIConfocalLineProfiler")
+                    ? "scan:" + engineId + ":scanner-0:topUniformProfileLayer0"
+                    : "scan:" + engineId + ":scanner-0:topUniformProfile";
+            }
+
+            std::string addOutputPayload = R"({"source":")" + sourceId + R"(","outputId":0,"autoShift":true})";
+            system->Client().Call(GOCATOR_ADD_OUTPUT_PATH, GoPxLSdk::GoJson(addOutputPayload)).CheckResponse(30000);
         }
-        catch (...) {}
+        catch (const std::exception& e)
+        {
+            std::cerr << "Gocator configure failed: " << e.what() << std::endl;
+        }
     }
 
     void grab(size_t frames)
@@ -376,9 +436,28 @@ void Gocator::close()
     _impl->close();
 }
 
-void Gocator::configure(double scanLengthMm, bool configureProfileOutput)
+std::vector<Gocator::DeviceInfo> Gocator::discoverDevices()
 {
-    _impl->configure(scanLengthMm, configureProfileOutput);
+    std::vector<Gocator::DeviceInfo> result;
+    try
+    {
+        gocator::GocatorDiscovery discovery;
+        std::vector<gocator::GocatorDeviceInfo> devices = discovery.discover();
+        result.reserve(devices.size());
+        for (const auto& d : devices)
+        {
+            result.push_back({d.address, d.deviceModel, std::to_string(d.serialNumber)});
+        }
+    }
+    catch (...)
+    {
+    }
+    return result;
+}
+
+void Gocator::configure(double scanLengthMm, ScanMode mode, bool intensityEnabled, bool uniformSpacingEnabled, int exposureUs)
+{
+    _impl->configure(scanLengthMm, mode, intensityEnabled, uniformSpacingEnabled, exposureUs);
 }
 
 void Gocator::grab(size_t frames)
@@ -399,4 +478,51 @@ bool Gocator::isGrabbing() const
 std::string Gocator::getConnectedAddress() const
 {
     return _impl->ipAddress;
+}
+
+std::string Gocator::getParametersSchema(const std::string& type) const
+{
+    if (!_impl->isOpened.load()) return "{}";
+    try
+    {
+        std::string path = (type == "scanner") ? _impl->getScannerPath() : _impl->getSensorPath();
+        return _impl->system->Resource(path)->Schema().ToString();
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "getParametersSchema failed: " << e.what() << std::endl;
+    }
+    return "{}";
+}
+
+std::string Gocator::getParametersData(const std::string& type) const
+{
+    if (!_impl->isOpened.load()) return "{}";
+    try
+    {
+        std::string path = (type == "scanner") ? _impl->getScannerPath() : _impl->getSensorPath();
+        return _impl->system->Resource(path)->Data().ToString();
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "getParametersData failed: " << e.what() << std::endl;
+    }
+    return "{}";
+}
+
+void Gocator::setParameterValue(const std::string& type, const std::string& path, const std::string& jsonValue)
+{
+    if (!_impl->isOpened.load()) return;
+    try
+    {
+        std::string resPath = (type == "scanner") ? _impl->getScannerPath() : _impl->getSensorPath();
+        auto resource = _impl->system->Resource(resPath);
+        GoPxLSdk::GoJson patch;
+        patch.Set(path, GoPxLSdk::GoJson(jsonValue));
+        resource->SetJson(patch);
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "setParameterValue failed: " << e.what() << " (path: " << path << ", val: " << jsonValue << ")" << std::endl;
+    }
 }

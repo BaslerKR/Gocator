@@ -2,14 +2,18 @@
 #define QGOCATORWIDGET_H
 
 #ifdef GOCATOR_HAS_UI
+#include <QJsonValue>
+#include <QMap>
 #include <QWidget>
 #include <QString>
 #include "gocator/Gocator.h"
 
-class QLineEdit;
+class QComboBox;
 class QDoubleSpinBox;
+class QSpinBox;
 class QCheckBox;
-class QPushButton;
+class QToolButton;
+class QTreeWidget;
 class QLabel;
 class QStatusBar;
 
@@ -22,30 +26,57 @@ public:
 
     void setStatus(const QString& status);
     void setRunningState(bool running);
-    
+
     QString ipAddress() const;
     double scanLengthMm() const;
-    bool configureProfileOutput() const;
+    Gocator::ScanMode scanMode() const;
+    int exposureUs() const;
+    bool intensityEnabled() const;
+    bool uniformSpacingEnabled() const;
 
     void setIpAddress(const QString& ip);
     void setScanLengthMm(double length);
-    void setConfigureProfileOutput(bool enable);
+    void setScanMode(Gocator::ScanMode mode);
+    void setExposureUs(int exposure);
+    void setIntensityEnabled(bool enable);
+    void setUniformSpacingEnabled(bool enable);
+    void prepareForShutdown();
 
 private slots:
-    void onStartClicked();
-    void onStopClicked();
+    void onRefreshClicked();
+    void onConnectToggled(bool toggled);
+    void onGrabOneClicked();
+    void onGrabLiveToggled(bool toggled);
     void handleStatusChanged(Gocator::Status status, bool on);
+    void onParameterChanged();
 
 private:
+    struct FeatureMapping {
+        QString type; // "scanner" or "sensor"
+        QString path; // JSON pointer path
+    };
+
+    void setConnectionOperationActive(bool active);
+    void applyConnectionState(bool opened);
+    void populateFeatures();
+    void clearFeatures();
+    void addFeatureNode(class QTreeWidgetItem* parentItem, const QString& type, const QString& basePath, const QString& name, const class QJsonObject& propSchema, const class QJsonObject& valuesObj);
+
     Gocator *_gocator = nullptr;
     Gocator::CallbackId _statusCallbackId = 0;
+    bool _shuttingDown = false;
 
-    QLineEdit *_ipEdit = nullptr;
-    QDoubleSpinBox *_scanLengthSpin = nullptr;
-    QCheckBox *_profileOutputCheck = nullptr;
+    QComboBox *_ipCombo = nullptr;
+    QToolButton *_toolRefresh = nullptr;
+    QToolButton *_toolConnect = nullptr;
+    QToolButton *_toolGrabOne = nullptr;
+    QToolButton *_toolGrabLive = nullptr;
+
+    QTreeWidget *_featuresWidget = nullptr;
+    QMap<QWidget*, FeatureMapping> _widgetToFeatureMap;
+    QMap<QString, class QJsonValue> _pendingParams;
+
     QLabel *_statusLabel = nullptr;
-    QPushButton *_startButton = nullptr;
-    QPushButton *_stopButton = nullptr;
     QStatusBar *_statusBar = nullptr;
 };
 #endif

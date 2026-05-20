@@ -3,16 +3,26 @@
 #ifdef GOCATOR_HAS_UI
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QFormLayout>
-#include <QGroupBox>
-#include <QLineEdit>
+#include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QSpinBox>
 #include <QCheckBox>
-#include <QPushButton>
+#include <QToolButton>
+#include <QTreeWidget>
+#include <QHeaderView>
+#include <QScrollBar>
 #include <QLabel>
 #include <QStatusBar>
 #include <QPointer>
 #include <QMetaObject>
+#include <QIcon>
+#include <QSize>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QJsonValue>
+#include <QSignalBlocker>
+#include <QDebug>
 
 QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     : QWidget(parent)
@@ -24,66 +34,121 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    // Group box for settings
-    auto *settingsGroup = new QGroupBox(QStringLiteral("Acquisition Settings"), this);
-    auto *groupLayout = new QVBoxLayout(settingsGroup);
-    groupLayout->setContentsMargins(12, 12, 12, 12);
-    groupLayout->setSpacing(10);
+    // IP selection & Control tools (Same layout style as QCameraWidget)
+    _ipCombo = new QComboBox(this);
+    _ipCombo->setObjectName(QStringLiteral("gocatorIpCombo"));
+    _ipCombo->setEditable(true);
+    _ipCombo->setMinimumWidth(120);
+    _ipCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    _ipCombo->setStyleSheet(QStringLiteral(
+        "min-height: 22px; max-height: 22px; padding: 0 6px; border: 1px solid #cfd9e4; border-radius: 8px; background: #ffffff; color: #16202b;"
+    ));
 
-    auto *formLayout = new QFormLayout();
-    formLayout->setSpacing(8);
+    const QString toolButtonStyle = QStringLiteral(
+        "min-width: 20px; min-height: 20px; max-width: 20px; max-height: 20px; padding: 0; border-radius: 8px;"
+    );
 
-    _ipEdit = new QLineEdit(settingsGroup);
-    _ipEdit->setObjectName(QStringLiteral("gocatorIpEdit"));
-    
-    _scanLengthSpin = new QDoubleSpinBox(settingsGroup);
-    _scanLengthSpin->setObjectName(QStringLiteral("gocatorScanLengthSpin"));
-    _scanLengthSpin->setRange(0.1, 100000.0);
-    _scanLengthSpin->setDecimals(3);
-    _scanLengthSpin->setSuffix(QStringLiteral(" mm"));
+    _toolRefresh = new QToolButton(this);
+    _toolRefresh->setObjectName(QStringLiteral("gocatorToolRefresh"));
+    _toolRefresh->setIcon(QIcon(QStringLiteral(":/Resources/Icons/icons8-refresh-48.png")));
+    _toolRefresh->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    _toolRefresh->setIconSize(QSize(16, 16));
+    _toolRefresh->setStyleSheet(toolButtonStyle);
 
-    _profileOutputCheck = new QCheckBox(settingsGroup);
-    _profileOutputCheck->setObjectName(QStringLiteral("gocatorProfileOutputCheck"));
+    _toolConnect = new QToolButton(this);
+    _toolConnect->setObjectName(QStringLiteral("gocatorToolConnect"));
+    _toolConnect->setCheckable(true);
+    _toolConnect->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    _toolConnect->setIconSize(QSize(16, 16));
+    _toolConnect->setStyleSheet(toolButtonStyle);
+    {
+        QIcon icon;
+        icon.addFile(QStringLiteral(":/Resources/Icons/icons8-connect-48.png"), QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(QStringLiteral(":/Resources/Icons/icons8-disconnected-48.png"), QSize(), QIcon::Normal, QIcon::On);
+        _toolConnect->setIcon(icon);
+    }
 
-    formLayout->addRow(QStringLiteral("IP Address"), _ipEdit);
-    formLayout->addRow(QStringLiteral("Scan Length"), _scanLengthSpin);
-    formLayout->addRow(QStringLiteral("Profile Output"), _profileOutputCheck);
-    groupLayout->addLayout(formLayout);
+    _toolGrabOne = new QToolButton(this);
+    _toolGrabOne->setObjectName(QStringLiteral("gocatorToolGrabOne"));
+    _toolGrabOne->setIcon(QIcon(QStringLiteral(":/Resources/Icons/icons8-camera-48.png")));
+    _toolGrabOne->setEnabled(false);
+    _toolGrabOne->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    _toolGrabOne->setIconSize(QSize(16, 16));
+    _toolGrabOne->setStyleSheet(toolButtonStyle);
 
-    // Buttons
-    auto *buttonLayout = new QHBoxLayout();
-    buttonLayout->setSpacing(8);
+    _toolGrabLive = new QToolButton(this);
+    _toolGrabLive->setObjectName(QStringLiteral("gocatorToolGrabLive"));
+    _toolGrabLive->setCheckable(true);
+    _toolGrabLive->setEnabled(false);
+    _toolGrabLive->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    _toolGrabLive->setIconSize(QSize(16, 16));
+    _toolGrabLive->setStyleSheet(toolButtonStyle);
+    {
+        QIcon icon;
+        icon.addFile(QStringLiteral(":/Resources/Icons/icons8-cameras-48.png"), QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(QStringLiteral(":/Resources/Icons/icons8-pause-48.png"), QSize(), QIcon::Normal, QIcon::On);
+        _toolGrabLive->setIcon(icon);
+    }
 
-    _startButton = new QPushButton(QStringLiteral("Start"), this);
-    _startButton->setObjectName(QStringLiteral("gocatorStartButton"));
-    
-    _stopButton = new QPushButton(QStringLiteral("Stop"), this);
-    _stopButton->setObjectName(QStringLiteral("gocatorStopButton"));
-    _stopButton->setEnabled(false);
+    auto *ipLayout = new QHBoxLayout;
+    ipLayout->setContentsMargins(0, 0, 0, 0);
+    ipLayout->setSpacing(8);
+    ipLayout->addWidget(_ipCombo);
+    ipLayout->addWidget(_toolRefresh);
 
-    buttonLayout->addWidget(_startButton);
-    buttonLayout->addWidget(_stopButton);
-    groupLayout->addLayout(buttonLayout);
+    auto *toolLayout = new QHBoxLayout;
+    toolLayout->setContentsMargins(0, 0, 0, 0);
+    toolLayout->setSpacing(6);
+    toolLayout->addWidget(_toolConnect);
+    toolLayout->addWidget(_toolGrabOne);
+    toolLayout->addWidget(_toolGrabLive);
 
-    // Top padding layout container
-    auto *contentLayout = new QVBoxLayout();
-    contentLayout->setContentsMargins(12, 12, 12, 12);
-    contentLayout->addWidget(settingsGroup);
-    contentLayout->addStretch();
-    mainLayout->addLayout(contentLayout);
+    auto *topBarLayout = new QHBoxLayout;
+    topBarLayout->setContentsMargins(12, 12, 12, 12);
+    topBarLayout->setSpacing(10);
+    topBarLayout->addLayout(ipLayout);
+    topBarLayout->addLayout(toolLayout);
 
-    // Status Bar
+    // Param Tree (Same widget style as QCameraWidget Features Tree)
+    _featuresWidget = new QTreeWidget(this);
+    _featuresWidget->setObjectName(QStringLiteral("GocatorFeaturesTree"));
+    _featuresWidget->setHeaderLabels(QStringList() << QStringLiteral("Feature") << QStringLiteral("Value"));
+    _featuresWidget->setRootIsDecorated(true);
+    _featuresWidget->setAnimated(false);
+    _featuresWidget->setAlternatingRowColors(true);
+    _featuresWidget->setUniformRowHeights(false);
+    _featuresWidget->setIndentation(12);
+    _featuresWidget->header()->setStretchLastSection(true);
+    _featuresWidget->header()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    _featuresWidget->header()->setSectionResizeMode(0, QHeaderView::Interactive);
+    _featuresWidget->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    _featuresWidget->header()->setMinimumSectionSize(60);
+    _featuresWidget->header()->resizeSection(0, 150);
+
+    auto *treeLayout = new QVBoxLayout;
+    treeLayout->setContentsMargins(12, 0, 12, 12);
+    treeLayout->setSpacing(8);
+    treeLayout->addWidget(_featuresWidget);
+
+    mainLayout->addLayout(topBarLayout);
+    mainLayout->addLayout(treeLayout);
+
+    // Status Bar (Same style as QCameraWidget StatusBar)
     _statusBar = new QStatusBar(this);
     _statusBar->setObjectName(QStringLiteral("GocatorStatusBar"));
-    _statusBar->setSizeGripEnabled(false);
+    _statusBar->setContentsMargins(0, 0, 0, 0);
+
     _statusLabel = new QLabel(QStringLiteral("Disconnected"), _statusBar);
     _statusLabel->setStyleSheet(QStringLiteral("color: #a12622; font-weight: 600;"));
     _statusBar->addWidget(_statusLabel);
-    
+
     mainLayout->addWidget(_statusBar);
 
-    connect(_startButton, &QPushButton::clicked, this, &QGocatorWidget::onStartClicked);
-    connect(_stopButton, &QPushButton::clicked, this, &QGocatorWidget::onStopClicked);
+    // Connections
+    connect(_toolRefresh, &QToolButton::clicked, this, &QGocatorWidget::onRefreshClicked);
+    connect(_toolConnect, &QToolButton::toggled, this, &QGocatorWidget::onConnectToggled);
+    connect(_toolGrabOne, &QToolButton::clicked, this, &QGocatorWidget::onGrabOneClicked);
+    connect(_toolGrabLive, &QToolButton::toggled, this, &QGocatorWidget::onGrabLiveToggled);
 
     if (_gocator)
     {
@@ -99,92 +164,171 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
             }
         });
 
-        // Initialize status based on current Gocator state
+        // Sync initial status
+        applyConnectionState(_gocator->isOpened());
         if (_gocator->isGrabbing())
         {
             setStatus(QStringLiteral("Running"));
             setRunningState(true);
-        }
-        else if (_gocator->isOpened())
-        {
-            setStatus(QStringLiteral("Connected"));
-            setRunningState(false);
         }
     }
 }
 
 QGocatorWidget::~QGocatorWidget()
 {
+    prepareForShutdown();
+    clearFeatures();
+}
+
+void QGocatorWidget::prepareForShutdown()
+{
+    _shuttingDown = true;
     if (_gocator && _statusCallbackId != 0)
     {
         _gocator->deregisterStatusCallback(_statusCallbackId);
+        _statusCallbackId = 0;
     }
+    _gocator = nullptr;
 }
 
-void QGocatorWidget::onStartClicked()
+void QGocatorWidget::onRefreshClicked()
 {
-    if (!_gocator) return;
-    
-    setStatus(QStringLiteral("Starting"));
-    setRunningState(true);
-    
-    if (!_gocator->isOpened())
+    if (!_gocator || _shuttingDown) return;
+
+    setStatus(QStringLiteral("Discovering"));
+    _ipCombo->clear();
+
+    std::vector<Gocator::DeviceInfo> devices = _gocator->discoverDevices();
+    if (devices.empty())
     {
-        if (!_gocator->open(ipAddress().toStdString()))
+        setStatus(QStringLiteral("No devices found"));
+        return;
+    }
+
+    for (const auto& device : devices)
+    {
+        QString text = QString::fromStdString(device.address + " (" + device.model + " S/N:" + device.serial + ")");
+        _ipCombo->addItem(text, QString::fromStdString(device.address));
+    }
+
+    setStatus(QStringLiteral("Discovery completed"));
+}
+
+void QGocatorWidget::onConnectToggled(bool toggled)
+{
+    if (!_gocator || _shuttingDown) return;
+
+    setConnectionOperationActive(true);
+    if (toggled)
+    {
+        setStatus(QStringLiteral("Connecting"));
+        if (_gocator->open(ipAddress().toStdString()))
         {
-            setStatus(QStringLiteral("Error"));
-            setRunningState(false);
-            return;
+            applyConnectionState(true);
+        }
+        else
+        {
+            setStatus(QStringLiteral("Connection Failed"));
+            QSignalBlocker blocker(_toolConnect);
+            _toolConnect->setChecked(false);
+            applyConnectionState(false);
         }
     }
-    
-    _gocator->configure(scanLengthMm(), configureProfileOutput());
-    _gocator->grab();
+    else
+    {
+        _gocator->close();
+        applyConnectionState(false);
+    }
+    setConnectionOperationActive(false);
 }
 
-void QGocatorWidget::onStopClicked()
+void QGocatorWidget::onGrabOneClicked()
 {
-    if (!_gocator) return;
+    if (!_gocator || _shuttingDown) return;
+    setStatus(QStringLiteral("Starting"));
+    _gocator->configure(scanLengthMm(), scanMode(), intensityEnabled(), uniformSpacingEnabled(), exposureUs());
+    _gocator->grab();
     _gocator->stop();
+}
+
+void QGocatorWidget::onGrabLiveToggled(bool toggled)
+{
+    if (!_gocator || _shuttingDown) return;
+
+    if (toggled)
+    {
+        setStatus(QStringLiteral("Starting"));
+        _gocator->configure(scanLengthMm(), scanMode(), intensityEnabled(), uniformSpacingEnabled(), exposureUs());
+        _gocator->grab();
+    }
+    else
+    {
+        _gocator->stop();
+    }
 }
 
 void QGocatorWidget::handleStatusChanged(Gocator::Status status, bool on)
 {
-    if (status == Gocator::ConnectionStatus)
+    if (_shuttingDown) return;
+
+    if (status == Gocator::GrabbingStatus)
     {
-        if (on)
-        {
-            setStatus(QStringLiteral("Connected"));
-        }
-        else
-        {
-            setStatus(QStringLiteral("Disconnected"));
-            setRunningState(false);
-        }
+        setStatus(on ? QStringLiteral("Running") : QStringLiteral("Connected"));
+        setRunningState(on);
+
+        QSignalBlocker blocker(_toolGrabLive);
+        _toolGrabLive->setChecked(on);
     }
-    else if (status == Gocator::GrabbingStatus)
+    else if (status == Gocator::ConnectionStatus)
     {
-        if (on)
+        applyConnectionState(on);
+        QSignalBlocker blocker(_toolConnect);
+        _toolConnect->setChecked(on);
+    }
+}
+
+void QGocatorWidget::setConnectionOperationActive(bool active)
+{
+    _ipCombo->setEnabled(!active);
+    _toolRefresh->setEnabled(!active);
+    _toolConnect->setEnabled(!active);
+}
+
+void QGocatorWidget::applyConnectionState(bool opened)
+{
+    if (_shuttingDown) return;
+
+    _ipCombo->setEnabled(!opened);
+    _toolRefresh->setEnabled(!opened);
+    _toolGrabOne->setEnabled(opened);
+    _toolGrabLive->setEnabled(opened);
+
+    if (opened)
+    {
+        setStatus(QStringLiteral("Connected"));
+        setRunningState(false);
+        populateFeatures();
+    }
+    else
+    {
         {
-            setStatus(QStringLiteral("Running"));
-            setRunningState(true);
+            QSignalBlocker blocker(_toolGrabLive);
+            _toolGrabLive->setChecked(false);
         }
-        else
-        {
-            setStatus(_gocator->isOpened() ? QStringLiteral("Connected") : QStringLiteral("Disconnected"));
-            setRunningState(false);
-        }
+        setStatus(QStringLiteral("Disconnected"));
+        setRunningState(false);
+        clearFeatures();
     }
 }
 
 void QGocatorWidget::setStatus(const QString& status)
 {
     _statusLabel->setText(status);
-    if (status == QStringLiteral("Running") || status == QStringLiteral("Connected"))
+    if (status == QStringLiteral("Running") || status == QStringLiteral("Connected") || status == QStringLiteral("Discovery completed"))
     {
         _statusLabel->setStyleSheet(QStringLiteral("color: #0a7a2f; font-weight: 600;"));
     }
-    else if (status == QStringLiteral("Starting"))
+    else if (status == QStringLiteral("Starting") || status == QStringLiteral("Connecting") || status == QStringLiteral("Discovering"))
     {
         _statusLabel->setStyleSheet(QStringLiteral("color: #b8860b; font-weight: 600;"));
     }
@@ -196,40 +340,402 @@ void QGocatorWidget::setStatus(const QString& status)
 
 void QGocatorWidget::setRunningState(bool running)
 {
-    _startButton->setEnabled(!running);
-    _stopButton->setEnabled(running);
-    _ipEdit->setEnabled(!running);
-    _scanLengthSpin->setEnabled(!running);
-    _profileOutputCheck->setEnabled(!running);
+    _toolGrabOne->setEnabled(_gocator && _gocator->isOpened() && !running);
+    _toolGrabLive->setEnabled(_gocator && _gocator->isOpened());
+
+    for (auto it = _widgetToFeatureMap.begin(); it != _widgetToFeatureMap.end(); ++it)
+    {
+        if (it.key())
+        {
+            it.key()->setEnabled(!running);
+        }
+    }
 }
 
 QString QGocatorWidget::ipAddress() const
 {
-    return _ipEdit->text().trimmed();
+    QString currentData = _ipCombo->currentData().toString();
+    if (currentData.isEmpty())
+    {
+        return _ipCombo->currentText().trimmed();
+    }
+    return currentData;
 }
 
 double QGocatorWidget::scanLengthMm() const
 {
-    return _scanLengthSpin->value();
+    QString path = QStringLiteral("/parameters/scanModeSettings/scanLengthMm");
+    if (_pendingParams.contains(path)) return _pendingParams[path].toDouble();
+    for (auto it = _widgetToFeatureMap.begin(); it != _widgetToFeatureMap.end(); ++it)
+    {
+        if (it.value().path == path)
+        {
+            if (auto* spin = qobject_cast<QDoubleSpinBox*>(it.key())) return spin->value();
+        }
+    }
+    return 20.0;
 }
 
-bool QGocatorWidget::configureProfileOutput() const
+Gocator::ScanMode QGocatorWidget::scanMode() const
 {
-    return _profileOutputCheck->isChecked();
+    QString path = QStringLiteral("/parameters/scanModeSettings/scanMode");
+    int val = 2; // Default Profile
+    if (_pendingParams.contains(path)) val = _pendingParams[path].toInt();
+    else
+    {
+        for (auto it = _widgetToFeatureMap.begin(); it != _widgetToFeatureMap.end(); ++it)
+        {
+            if (it.value().path == path)
+            {
+                if (auto* combo = qobject_cast<QComboBox*>(it.key())) val = combo->currentData().toInt();
+            }
+        }
+    }
+    return (val == 3) ? Gocator::ScanMode::SurfaceMode : Gocator::ScanMode::ProfileMode;
+}
+
+int QGocatorWidget::exposureUs() const
+{
+    QString path = QStringLiteral("/parameters/exposureSettings/singleExposure");
+    if (_pendingParams.contains(path)) return _pendingParams[path].toInt();
+    for (auto it = _widgetToFeatureMap.begin(); it != _widgetToFeatureMap.end(); ++it)
+    {
+        if (it.value().path == path)
+        {
+            if (auto* spin = qobject_cast<QSpinBox*>(it.key())) return spin->value();
+        }
+    }
+    return 1000;
+}
+
+bool QGocatorWidget::intensityEnabled() const
+{
+    QString path = QStringLiteral("/parameters/scanModeSettings/intensityEnabled");
+    if (_pendingParams.contains(path)) return _pendingParams[path].toBool();
+    for (auto it = _widgetToFeatureMap.begin(); it != _widgetToFeatureMap.end(); ++it)
+    {
+        if (it.value().path == path)
+        {
+            if (auto* check = qobject_cast<QCheckBox*>(it.key())) return check->isChecked();
+        }
+    }
+    return true;
+}
+
+bool QGocatorWidget::uniformSpacingEnabled() const
+{
+    QString path = QStringLiteral("/parameters/scanModeSettings/uniformSpacingEnabled");
+    if (_pendingParams.contains(path)) return _pendingParams[path].toBool();
+    for (auto it = _widgetToFeatureMap.begin(); it != _widgetToFeatureMap.end(); ++it)
+    {
+        if (it.value().path == path)
+        {
+            if (auto* check = qobject_cast<QCheckBox*>(it.key())) return check->isChecked();
+        }
+    }
+    return true;
 }
 
 void QGocatorWidget::setIpAddress(const QString& ip)
 {
-    _ipEdit->setText(ip);
+    int index = _ipCombo->findData(ip);
+    if (index >= 0)
+    {
+        _ipCombo->setCurrentIndex(index);
+    }
+    else
+    {
+        _ipCombo->setCurrentText(ip);
+    }
 }
 
 void QGocatorWidget::setScanLengthMm(double length)
 {
-    _scanLengthSpin->setValue(length);
+    QString path = QStringLiteral("/parameters/scanModeSettings/scanLengthMm");
+    _pendingParams[path] = length;
+    if (_gocator && _gocator->isOpened())
+    {
+        _gocator->setParameterValue("scanner", path.toStdString(), std::to_string(length));
+        populateFeatures();
+    }
 }
 
-void QGocatorWidget::setConfigureProfileOutput(bool enable)
+void QGocatorWidget::setScanMode(Gocator::ScanMode mode)
 {
-    _profileOutputCheck->setChecked(enable);
+    int val = (mode == Gocator::ScanMode::SurfaceMode) ? 3 : 2;
+    QString path = QStringLiteral("/parameters/scanModeSettings/scanMode");
+    _pendingParams[path] = val;
+    if (_gocator && _gocator->isOpened())
+    {
+        _gocator->setParameterValue("scanner", path.toStdString(), std::to_string(val));
+        populateFeatures();
+    }
+}
+
+void QGocatorWidget::setExposureUs(int exposure)
+{
+    QString path = QStringLiteral("/parameters/exposureSettings/singleExposure");
+    _pendingParams[path] = exposure;
+    if (_gocator && _gocator->isOpened())
+    {
+        _gocator->setParameterValue("sensor", path.toStdString(), std::to_string(exposure));
+        populateFeatures();
+    }
+}
+
+void QGocatorWidget::setIntensityEnabled(bool enable)
+{
+    QString path = QStringLiteral("/parameters/scanModeSettings/intensityEnabled");
+    _pendingParams[path] = enable;
+    if (_gocator && _gocator->isOpened())
+    {
+        _gocator->setParameterValue("scanner", path.toStdString(), enable ? "true" : "false");
+        populateFeatures();
+    }
+}
+
+void QGocatorWidget::setUniformSpacingEnabled(bool enable)
+{
+    QString path = QStringLiteral("/parameters/scanModeSettings/uniformSpacingEnabled");
+    _pendingParams[path] = enable;
+    if (_gocator && _gocator->isOpened())
+    {
+        _gocator->setParameterValue("scanner", path.toStdString(), enable ? "true" : "false");
+        populateFeatures();
+    }
+}
+
+void QGocatorWidget::clearFeatures()
+{
+    _widgetToFeatureMap.clear();
+    _featuresWidget->clear();
+}
+
+void QGocatorWidget::populateFeatures()
+{
+    if (!_gocator || _shuttingDown || !_gocator->isOpened()) return;
+
+    clearFeatures();
+
+    QString scannerSchemaStr = QString::fromStdString(_gocator->getParametersSchema("scanner"));
+    QString scannerDataStr = QString::fromStdString(_gocator->getParametersData("scanner"));
+    QString sensorSchemaStr = QString::fromStdString(_gocator->getParametersSchema("sensor"));
+    QString sensorDataStr = QString::fromStdString(_gocator->getParametersData("sensor"));
+
+    QJsonObject scannerSchema = QJsonDocument::fromJson(scannerSchemaStr.toUtf8()).object();
+    QJsonObject scannerData = QJsonDocument::fromJson(scannerDataStr.toUtf8()).object();
+    QJsonObject sensorSchema = QJsonDocument::fromJson(sensorSchemaStr.toUtf8()).object();
+    QJsonObject sensorData = QJsonDocument::fromJson(sensorDataStr.toUtf8()).object();
+
+    // scanner 리소스 전개
+    {
+        QJsonObject parametersSchema = scannerSchema.value(QStringLiteral("properties")).toObject()
+                                                   .value(QStringLiteral("parameters")).toObject();
+        QJsonObject parametersValues = scannerData.value(QStringLiteral("parameters")).toObject();
+
+        QJsonObject subProps = parametersSchema.value(QStringLiteral("properties")).toObject();
+        for (auto it = subProps.begin(); it != subProps.end(); ++it)
+        {
+            addFeatureNode(nullptr, QStringLiteral("scanner"), QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
+        }
+    }
+
+    // sensor 리소스 전개
+    {
+        QJsonObject parametersSchema = sensorSchema.value(QStringLiteral("properties")).toObject()
+                                                   .value(QStringLiteral("parameters")).toObject();
+        QJsonObject parametersValues = sensorData.value(QStringLiteral("parameters")).toObject();
+
+        QJsonObject subProps = parametersSchema.value(QStringLiteral("properties")).toObject();
+        for (auto it = subProps.begin(); it != subProps.end(); ++it)
+        {
+            addFeatureNode(nullptr, QStringLiteral("sensor"), QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
+        }
+    }
+}
+
+void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, const QString& type, const QString& basePath, const QString& name, const QJsonObject& propSchema, const QJsonObject& valuesObj)
+{
+    QString propType = propSchema.value(QStringLiteral("type")).toString();
+    QString path = basePath + "/" + name;
+
+    if (propType == QStringLiteral("object"))
+    {
+        QJsonObject subProperties = propSchema.value(QStringLiteral("properties")).toObject();
+        if (subProperties.isEmpty()) return;
+
+        QTreeWidgetItem* groupItem = nullptr;
+        if (parentItem)
+        {
+            groupItem = new QTreeWidgetItem(parentItem, QStringList() << name);
+        }
+        else
+        {
+            groupItem = new QTreeWidgetItem(_featuresWidget, QStringList() << name);
+        }
+
+        QJsonObject subValues = valuesObj.value(name).toObject();
+        for (auto it = subProperties.begin(); it != subProperties.end(); ++it)
+        {
+            addFeatureNode(groupItem, type, path, it.key(), it.value().toObject(), subValues);
+        }
+        groupItem->setExpanded(true);
+    }
+    else
+    {
+        QTreeWidgetItem* item = nullptr;
+        if (parentItem)
+        {
+            item = new QTreeWidgetItem(parentItem, QStringList() << name);
+        }
+        else
+        {
+            item = new QTreeWidgetItem(_featuresWidget, QStringList() << name);
+        }
+
+        QWidget* editorWidget = nullptr;
+        QJsonValue curVal = valuesObj.value(name);
+
+        if (_pendingParams.contains(path))
+        {
+            curVal = _pendingParams.value(path);
+        }
+
+        if (propType == QStringLiteral("boolean"))
+        {
+            QCheckBox* check = new QCheckBox(_featuresWidget);
+            check->setChecked(curVal.toBool());
+            connect(check, &QCheckBox::stateChanged, this, &QGocatorWidget::onParameterChanged);
+            editorWidget = check;
+        }
+        else if (propType == QStringLiteral("integer") || propType == QStringLiteral("number"))
+        {
+            if (propSchema.contains(QStringLiteral("enum")))
+            {
+                QComboBox* combo = new QComboBox(_featuresWidget);
+                QJsonArray enumVals = propSchema.value(QStringLiteral("enum")).toArray();
+                int activeIndex = 0;
+                for (int i = 0; i < enumVals.size(); ++i)
+                {
+                    QJsonValue enumV = enumVals.at(i);
+                    QString enumText;
+                    if (enumV.isDouble())
+                    {
+                        enumText = QString::number(enumV.toDouble());
+                        combo->addItem(enumText, enumV.toDouble());
+                        if (curVal.toDouble() == enumV.toDouble()) activeIndex = i;
+                    }
+                    else
+                    {
+                        enumText = enumV.toString();
+                        combo->addItem(enumText, enumV.toString());
+                        if (curVal.toString() == enumV.toString()) activeIndex = i;
+                    }
+                }
+                combo->setCurrentIndex(activeIndex);
+                connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &QGocatorWidget::onParameterChanged);
+                editorWidget = combo;
+            }
+            else
+            {
+                double minVal = propSchema.value(QStringLiteral("minimum")).toDouble(0.0);
+                double maxVal = propSchema.value(QStringLiteral("maximum")).toDouble(100000.0);
+
+                if (propType == QStringLiteral("integer"))
+                {
+                    QSpinBox* spin = new QSpinBox(_featuresWidget);
+                    spin->setRange(static_cast<int>(minVal), static_cast<int>(maxVal));
+                    spin->setValue(curVal.toInt(0));
+                    connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), this, &QGocatorWidget::onParameterChanged);
+                    editorWidget = spin;
+                }
+                else // number
+                {
+                    QDoubleSpinBox* spin = new QDoubleSpinBox(_featuresWidget);
+                    spin->setRange(minVal, maxVal);
+                    spin->setValue(curVal.toDouble(0.0));
+                    spin->setSingleStep(0.1);
+                    connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &QGocatorWidget::onParameterChanged);
+                    editorWidget = spin;
+                }
+            }
+        }
+        else if (propType == QStringLiteral("string"))
+        {
+            if (propSchema.contains(QStringLiteral("enum")))
+            {
+                QComboBox* combo = new QComboBox(_featuresWidget);
+                QJsonArray enumVals = propSchema.value(QStringLiteral("enum")).toArray();
+                int activeIndex = 0;
+                for (int i = 0; i < enumVals.size(); ++i)
+                {
+                    QString enumText = enumVals.at(i).toString();
+                    combo->addItem(enumText, enumText);
+                    if (curVal.toString() == enumText) activeIndex = i;
+                }
+                combo->setCurrentIndex(activeIndex);
+                connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &QGocatorWidget::onParameterChanged);
+                editorWidget = combo;
+            }
+        }
+
+        if (editorWidget)
+        {
+            editorWidget->setObjectName(QStringLiteral("gocatorFeature_") + name);
+            const int height = editorWidget->sizeHint().height() + 4;
+            item->setSizeHint(0, QSize(0, height));
+            item->setSizeHint(1, QSize(0, height));
+            _featuresWidget->setItemWidget(item, 1, editorWidget);
+            _widgetToFeatureMap.insert(editorWidget, FeatureMapping{type, path});
+        }
+    }
+}
+
+void QGocatorWidget::onParameterChanged()
+{
+    QWidget* senderWidget = qobject_cast<QWidget*>(sender());
+    if (!senderWidget || !_gocator || _shuttingDown) return;
+
+    auto it = _widgetToFeatureMap.find(senderWidget);
+    if (it == _widgetToFeatureMap.end()) return;
+
+    const FeatureMapping& mapping = it.value();
+
+    QJsonValue jsonVal;
+    if (auto* check = qobject_cast<QCheckBox*>(senderWidget))
+    {
+        jsonVal = check->isChecked();
+    }
+    else if (auto* spin = qobject_cast<QSpinBox*>(senderWidget))
+    {
+        jsonVal = spin->value();
+    }
+    else if (auto* dspin = qobject_cast<QDoubleSpinBox*>(senderWidget))
+    {
+        jsonVal = dspin->value();
+    }
+    else if (auto* combo = qobject_cast<QComboBox*>(senderWidget))
+    {
+        jsonVal = QJsonValue::fromVariant(combo->currentData());
+    }
+
+    if (!jsonVal.isNull())
+    {
+        QString jsonValueStr;
+        if (jsonVal.isBool())
+        {
+            jsonValueStr = jsonVal.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+        }
+        else if (jsonVal.isDouble())
+        {
+            jsonValueStr = QString::number(jsonVal.toDouble());
+        }
+        else if (jsonVal.isString())
+        {
+            jsonValueStr = "\"" + jsonVal.toString() + "\"";
+        }
+
+        _gocator->setParameterValue(mapping.type.toStdString(), mapping.path.toStdString(), jsonValueStr.toStdString());
+    }
 }
 #endif
