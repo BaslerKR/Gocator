@@ -18,6 +18,7 @@
 #include <QIcon>
 #include <QSize>
 #include <QJsonDocument>
+#include <QCoreApplication>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonValue>
@@ -40,27 +41,18 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     _ipCombo->setEditable(true);
     _ipCombo->setMinimumWidth(120);
     _ipCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    _ipCombo->setStyleSheet(QStringLiteral(
-        "min-height: 22px; max-height: 22px; padding: 0 6px; border: 1px solid #cfd9e4; border-radius: 8px; background: #ffffff; color: #16202b;"
-    ));
-
-    const QString toolButtonStyle = QStringLiteral(
-        "min-width: 20px; min-height: 20px; max-width: 20px; max-height: 20px; padding: 0; border-radius: 8px;"
-    );
 
     _toolRefresh = new QToolButton(this);
     _toolRefresh->setObjectName(QStringLiteral("gocatorToolRefresh"));
     _toolRefresh->setIcon(QIcon(QStringLiteral(":/Resources/Icons/icons8-refresh-48.png")));
     _toolRefresh->setToolButtonStyle(Qt::ToolButtonIconOnly);
     _toolRefresh->setIconSize(QSize(16, 16));
-    _toolRefresh->setStyleSheet(toolButtonStyle);
 
     _toolConnect = new QToolButton(this);
     _toolConnect->setObjectName(QStringLiteral("gocatorToolConnect"));
     _toolConnect->setCheckable(true);
     _toolConnect->setToolButtonStyle(Qt::ToolButtonIconOnly);
     _toolConnect->setIconSize(QSize(16, 16));
-    _toolConnect->setStyleSheet(toolButtonStyle);
     {
         QIcon icon;
         icon.addFile(QStringLiteral(":/Resources/Icons/icons8-connect-48.png"), QSize(), QIcon::Normal, QIcon::Off);
@@ -74,7 +66,6 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     _toolGrabOne->setEnabled(false);
     _toolGrabOne->setToolButtonStyle(Qt::ToolButtonIconOnly);
     _toolGrabOne->setIconSize(QSize(16, 16));
-    _toolGrabOne->setStyleSheet(toolButtonStyle);
 
     _toolGrabLive = new QToolButton(this);
     _toolGrabLive->setObjectName(QStringLiteral("gocatorToolGrabLive"));
@@ -82,7 +73,6 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     _toolGrabLive->setEnabled(false);
     _toolGrabLive->setToolButtonStyle(Qt::ToolButtonIconOnly);
     _toolGrabLive->setIconSize(QSize(16, 16));
-    _toolGrabLive->setStyleSheet(toolButtonStyle);
     {
         QIcon icon;
         icon.addFile(QStringLiteral(":/Resources/Icons/icons8-cameras-48.png"), QSize(), QIcon::Normal, QIcon::Off);
@@ -117,13 +107,13 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     _featuresWidget->setAnimated(false);
     _featuresWidget->setAlternatingRowColors(true);
     _featuresWidget->setUniformRowHeights(false);
-    _featuresWidget->setIndentation(12);
+    _featuresWidget->setIndentation(18);
     _featuresWidget->header()->setStretchLastSection(true);
     _featuresWidget->header()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     _featuresWidget->header()->setSectionResizeMode(0, QHeaderView::Interactive);
     _featuresWidget->header()->setSectionResizeMode(1, QHeaderView::Stretch);
     _featuresWidget->header()->setMinimumSectionSize(60);
-    _featuresWidget->header()->resizeSection(0, 150);
+    _featuresWidget->header()->resizeSection(0, 200);
 
     auto *treeLayout = new QVBoxLayout;
     treeLayout->setContentsMargins(12, 0, 12, 12);
@@ -195,13 +185,26 @@ void QGocatorWidget::onRefreshClicked()
 {
     if (!_gocator || _shuttingDown) return;
 
+    QString currentAddress = ipAddress();
     setStatus(QStringLiteral("Discovering"));
-    _ipCombo->clear();
+    QCoreApplication::processEvents();
 
     std::vector<Gocator::DeviceInfo> devices = _gocator->discoverDevices();
+    
+    _ipCombo->clear();
+
     if (devices.empty())
     {
         setStatus(QStringLiteral("No devices found"));
+        // Restore previous address or default to Gocator standard IP
+        if (!currentAddress.isEmpty())
+        {
+            _ipCombo->setEditText(currentAddress);
+        }
+        else
+        {
+            _ipCombo->setEditText(QStringLiteral("192.168.1.10"));
+        }
         return;
     }
 
@@ -211,7 +214,15 @@ void QGocatorWidget::onRefreshClicked()
         _ipCombo->addItem(text, QString::fromStdString(device.address));
     }
 
-    setStatus(QStringLiteral("Discovery completed"));
+    // Try to restore selection
+    if (!currentAddress.isEmpty())
+    {
+        int index = _ipCombo->findData(currentAddress);
+        if (index >= 0) _ipCombo->setCurrentIndex(index);
+        else _ipCombo->setEditText(currentAddress);
+    }
+
+    setStatus(QStringLiteral("Discovered %1 devices").arg(devices.size()));
 }
 
 void QGocatorWidget::onConnectToggled(bool toggled)
@@ -222,6 +233,7 @@ void QGocatorWidget::onConnectToggled(bool toggled)
     if (toggled)
     {
         setStatus(QStringLiteral("Connecting"));
+        QCoreApplication::processEvents();
         if (_gocator->open(ipAddress().toStdString()))
         {
             applyConnectionState(true);
@@ -535,8 +547,16 @@ void QGocatorWidget::populateFeatures()
     QJsonObject sensorSchema = QJsonDocument::fromJson(sensorSchemaStr.toUtf8()).object();
     QJsonObject sensorData = QJsonDocument::fromJson(sensorDataStr.toUtf8()).object();
 
+    QTreeWidgetItem* rootItem = new QTreeWidgetItem(_featuresWidget, QStringList() << QString::fromStdString(_gocator->getConnectedAddress()));
+    rootItem->setSizeHint(0, QSize(0, 22));
+    rootItem->setSizeHint(1, QSize(0, 22));
+
     // scanner 리소스 전개
     {
+        QTreeWidgetItem* scannerCategory = new QTreeWidgetItem(rootItem, QStringList() << QStringLiteral("Scanner"));
+        scannerCategory->setSizeHint(0, QSize(0, 22));
+        scannerCategory->setSizeHint(1, QSize(0, 22));
+
         QJsonObject parametersSchema = scannerSchema.value(QStringLiteral("properties")).toObject()
                                                    .value(QStringLiteral("parameters")).toObject();
         QJsonObject parametersValues = scannerData.value(QStringLiteral("parameters")).toObject();
@@ -544,12 +564,17 @@ void QGocatorWidget::populateFeatures()
         QJsonObject subProps = parametersSchema.value(QStringLiteral("properties")).toObject();
         for (auto it = subProps.begin(); it != subProps.end(); ++it)
         {
-            addFeatureNode(nullptr, QStringLiteral("scanner"), QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
+            addFeatureNode(scannerCategory, QStringLiteral("scanner"), QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
         }
+        scannerCategory->setExpanded(true);
     }
 
     // sensor 리소스 전개
     {
+        QTreeWidgetItem* sensorCategory = new QTreeWidgetItem(rootItem, QStringList() << QStringLiteral("Sensor"));
+        sensorCategory->setSizeHint(0, QSize(0, 22));
+        sensorCategory->setSizeHint(1, QSize(0, 22));
+
         QJsonObject parametersSchema = sensorSchema.value(QStringLiteral("properties")).toObject()
                                                    .value(QStringLiteral("parameters")).toObject();
         QJsonObject parametersValues = sensorData.value(QStringLiteral("parameters")).toObject();
@@ -557,15 +582,23 @@ void QGocatorWidget::populateFeatures()
         QJsonObject subProps = parametersSchema.value(QStringLiteral("properties")).toObject();
         for (auto it = subProps.begin(); it != subProps.end(); ++it)
         {
-            addFeatureNode(nullptr, QStringLiteral("sensor"), QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
+            addFeatureNode(sensorCategory, QStringLiteral("sensor"), QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
         }
+        sensorCategory->setExpanded(false);
     }
+
+    rootItem->setExpanded(true);
 }
 
 void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, const QString& type, const QString& basePath, const QString& name, const QJsonObject& propSchema, const QJsonObject& valuesObj)
 {
     QString propType = propSchema.value(QStringLiteral("type")).toString();
     QString path = basePath + "/" + name;
+    
+    // Use 'label' or 'title' for user-friendly name if available, otherwise fallback to the key 'name'
+    QString displayName = propSchema.value(QStringLiteral("label")).toString();
+    if (displayName.isEmpty()) displayName = propSchema.value(QStringLiteral("title")).toString();
+    if (displayName.isEmpty()) displayName = name;
 
     if (propType == QStringLiteral("object"))
     {
@@ -575,12 +608,14 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, const QString& 
         QTreeWidgetItem* groupItem = nullptr;
         if (parentItem)
         {
-            groupItem = new QTreeWidgetItem(parentItem, QStringList() << name);
+            groupItem = new QTreeWidgetItem(parentItem, QStringList() << displayName);
         }
         else
         {
-            groupItem = new QTreeWidgetItem(_featuresWidget, QStringList() << name);
+            groupItem = new QTreeWidgetItem(_featuresWidget, QStringList() << displayName);
         }
+        groupItem->setSizeHint(0, QSize(0, 22));
+        groupItem->setSizeHint(1, QSize(0, 22));
 
         QJsonObject subValues = valuesObj.value(name).toObject();
         for (auto it = subProperties.begin(); it != subProperties.end(); ++it)
@@ -594,11 +629,11 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, const QString& 
         QTreeWidgetItem* item = nullptr;
         if (parentItem)
         {
-            item = new QTreeWidgetItem(parentItem, QStringList() << name);
+            item = new QTreeWidgetItem(parentItem, QStringList() << displayName);
         }
         else
         {
-            item = new QTreeWidgetItem(_featuresWidget, QStringList() << name);
+            item = new QTreeWidgetItem(_featuresWidget, QStringList() << displayName);
         }
 
         QWidget* editorWidget = nullptr;

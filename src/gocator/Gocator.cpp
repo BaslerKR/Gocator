@@ -463,15 +463,29 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices()
     try
     {
         gocator::GocatorDiscovery discovery;
-        std::vector<gocator::GocatorDeviceInfo> devices = discovery.discover();
+        
+        // Try standard discovery first
+        std::vector<gocator::GocatorDeviceInfo> devices = discovery.discover({3000, false});
+        
+        // If nothing found, try classic discovery for older G2/G3 sensors
+        if (devices.empty())
+        {
+            devices = discovery.discover({2000, true});
+        }
+
         result.reserve(devices.size());
         for (const auto& d : devices)
         {
             result.push_back({d.address, d.deviceModel, std::to_string(d.serialNumber)});
         }
     }
+    catch (const std::exception& e)
+    {
+        std::cerr << "Discovery failed: " << e.what() << std::endl;
+    }
     catch (...)
     {
+        std::cerr << "Discovery failed with unknown error" << std::endl;
     }
     return result;
 }
