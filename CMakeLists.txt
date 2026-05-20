@@ -23,6 +23,7 @@ add_library(gocator_core
     src/gocator/GocatorResourceClient.cpp
     src/gocator/GocatorSdkRuntime.cpp
     src/gocator/GocatorSettingsManager.cpp
+    src/gocator/Gocator.cpp
 )
 
 target_include_directories(gocator_core
@@ -53,6 +54,14 @@ add_executable(gocator
 if(GOCATOR_BUILD_QT_UI)
     find_package(Qt6 QUIET COMPONENTS Widgets)
     if(Qt6_FOUND)
+        set_target_properties(gocator_core PROPERTIES AUTOMOC ON)
+        target_sources(gocator_core PRIVATE
+            src/gocator/QGocatorWidget.cpp
+            src/gocator/QGocatorWidget.h
+        )
+        target_link_libraries(gocator_core PUBLIC Qt6::Widgets)
+        target_compile_definitions(gocator_core PUBLIC GOCATOR_HAS_UI)
+
         target_sources(gocator PRIVATE src/ui_main.cpp)
         target_link_libraries(gocator PRIVATE Qt6::Widgets)
         target_compile_definitions(gocator PRIVATE GOCATOR_HAS_UI)
