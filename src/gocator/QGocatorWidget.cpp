@@ -657,21 +657,22 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, const QString& 
             {
                 QComboBox* combo = new QComboBox(_featuresWidget);
                 QJsonArray enumVals = propSchema.value(QStringLiteral("enum")).toArray();
+                QJsonArray enumTexts = propSchema.value(QStringLiteral("enumText")).toArray();
                 int activeIndex = 0;
                 for (int i = 0; i < enumVals.size(); ++i)
                 {
                     QJsonValue enumV = enumVals.at(i);
-                    QString enumText;
+                    QString displayText = (i < enumTexts.size()) ? enumTexts.at(i).toString() : QString();
                     if (enumV.isDouble())
                     {
-                        enumText = QString::number(enumV.toDouble());
-                        combo->addItem(enumText, enumV.toDouble());
+                        if (displayText.isEmpty()) displayText = QString::number(enumV.toDouble());
+                        combo->addItem(displayText, enumV.toDouble());
                         if (curVal.toDouble() == enumV.toDouble()) activeIndex = i;
                     }
                     else
                     {
-                        enumText = enumV.toString();
-                        combo->addItem(enumText, enumV.toString());
+                        if (displayText.isEmpty()) displayText = enumV.toString();
+                        combo->addItem(displayText, enumV.toString());
                         if (curVal.toString() == enumV.toString()) activeIndex = i;
                     }
                 }
@@ -709,12 +710,14 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, const QString& 
             {
                 QComboBox* combo = new QComboBox(_featuresWidget);
                 QJsonArray enumVals = propSchema.value(QStringLiteral("enum")).toArray();
+                QJsonArray enumTexts = propSchema.value(QStringLiteral("enumText")).toArray();
                 int activeIndex = 0;
                 for (int i = 0; i < enumVals.size(); ++i)
                 {
-                    QString enumText = enumVals.at(i).toString();
-                    combo->addItem(enumText, enumText);
-                    if (curVal.toString() == enumText) activeIndex = i;
+                    QString enumValue = enumVals.at(i).toString();
+                    QString displayText = (i < enumTexts.size()) ? enumTexts.at(i).toString() : enumValue;
+                    combo->addItem(displayText, enumValue);
+                    if (curVal.toString() == enumValue) activeIndex = i;
                 }
                 combo->setCurrentIndex(activeIndex);
                 connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &QGocatorWidget::onParameterChanged);
@@ -725,7 +728,7 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, const QString& 
         if (editorWidget)
         {
             editorWidget->setObjectName(QStringLiteral("gocatorFeature_") + name);
-            const int height = editorWidget->sizeHint().height() + 4;
+            const int height = editorWidget->sizeHint().height();
             item->setSizeHint(0, QSize(0, height));
             item->setSizeHint(1, QSize(0, height));
             _featuresWidget->setItemWidget(item, 1, editorWidget);
