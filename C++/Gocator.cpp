@@ -505,6 +505,10 @@ Gocator::DeviceInfo Gocator::getConnectedDeviceInfo() const
                     info.isVirtual = true;
                 }
             }
+            else
+            {
+                info.isVirtual = true;
+            }
         }
     }
     catch (...) {}

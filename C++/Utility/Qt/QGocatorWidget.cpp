@@ -31,6 +31,15 @@ namespace
 {
 std::string formatDeviceName(const std::string& model, const std::string& serial, const std::string& address, bool isVirtual = false)
 {
+    if (model.empty() || model == "Unknown")
+    {
+        if (isVirtual)
+        {
+            return "Unknown (Virtual) - " + address;
+        }
+        return "Unknown - " + address;
+    }
+
     std::string displayName = model;
     bool replaced = false;
     for (const std::string& target : {"Gocator ", "gocator ", "Gocator", "gocator"})
@@ -407,7 +416,7 @@ void QGocatorWidget::applyConnectionState(bool opened)
         if (_gocator)
         {
             Gocator::DeviceInfo devInfo = _gocator->getConnectedDeviceInfo();
-            if (!devInfo.address.empty() && !devInfo.model.empty())
+            if (!devInfo.address.empty())
             {
                 QString ip = QString::fromStdString(devInfo.address);
                 QString text = QString::fromStdString(formatDeviceName(devInfo.model, devInfo.serial, devInfo.address, devInfo.isVirtual));
@@ -646,7 +655,16 @@ void QGocatorWidget::populateFeatures()
     QJsonObject sensorSchema = QJsonDocument::fromJson(sensorSchemaStr.toUtf8()).object();
     QJsonObject sensorData = QJsonDocument::fromJson(sensorDataStr.toUtf8()).object();
 
-    QTreeWidgetItem* rootItem = new QTreeWidgetItem(_featuresWidget, QStringList() << QString::fromStdString(_gocator->getConnectedAddress()));
+    QString rootText = QString::fromStdString(_gocator->getConnectedAddress());
+    {
+        Gocator::DeviceInfo devInfo = _gocator->getConnectedDeviceInfo();
+        if (!devInfo.address.empty())
+        {
+            rootText = QString::fromStdString(formatDeviceName(devInfo.model, devInfo.serial, devInfo.address, devInfo.isVirtual));
+        }
+    }
+
+    QTreeWidgetItem* rootItem = new QTreeWidgetItem(_featuresWidget, QStringList() << rootText);
     rootItem->setSizeHint(0, QSize(0, 22));
     rootItem->setSizeHint(1, QSize(0, 22));
 
