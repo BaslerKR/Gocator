@@ -22,6 +22,16 @@ namespace
 constexpr const char* GOCATOR_CONTROL_PATH = "/controls/gocator";
 constexpr const char* GOCATOR_ADD_OUTPUT_PATH = "/controls/gocator/outputs/commands/add";
 constexpr const char* GOCATOR_REMOVE_ALL_OUTPUT_PATH = "/controls/gocator/outputs/commands/removeAll";
+constexpr const char* SCAN_LENGTH_PARAMETER_PATH = "/parameters/scanModeSettings/scanLengthMm";
+constexpr const char* SCAN_MODE_PARAMETER_PATH = "/parameters/scanModeSettings/scanMode";
+constexpr const char* INTENSITY_PARAMETER_PATH = "/parameters/scanModeSettings/intensityEnabled";
+constexpr const char* UNIFORM_SPACING_PARAMETER_PATH = "/parameters/scanModeSettings/uniformSpacingEnabled";
+constexpr const char* EXPOSURE_PARAMETER_PATH = "/parameters/exposureSettings/singleExposure";
+
+[[nodiscard]] Gocator::ParameterTarget parameterTargetFromString(const std::string& type)
+{
+    return (type == "scanner") ? Gocator::ParameterTarget::Scanner : Gocator::ParameterTarget::Sensor;
+}
 
 [[nodiscard]] gocator::GocatorConnectionConfig resolveTarget(const std::string& ipAddress)
 {
@@ -94,6 +104,11 @@ struct Gocator::Impl
     std::string getSensorPath() const
     {
         return getScannerPath() + "/sensors/sensor-0";
+    }
+
+    std::string getParameterTargetPath(ParameterTarget target) const
+    {
+        return (target == ParameterTarget::Scanner) ? getScannerPath() : getSensorPath();
     }
 
     std::mutex statusMutex;
@@ -234,6 +249,21 @@ struct Gocator::Impl
         catch (const std::exception& e)
         {
             std::cerr << "Gocator configure failed: " << e.what() << std::endl;
+        }
+    }
+
+    void setParameterValue(ParameterTarget target, const std::string& path, const std::string& jsonValue)
+    {
+        if (!isOpened.load()) return;
+        try
+        {
+            GoPxLSdk::GoJson patch;
+            patch.Set(path, GoPxLSdk::GoJson(jsonValue));
+            resources->setJson(getParameterTargetPath(target), patch);
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "setParameterValue failed: " << e.what() << " (path: " << path << ", val: " << jsonValue << ")" << std::endl;
         }
     }
 
@@ -455,6 +485,32 @@ void Gocator::configure(double scanLengthMm, ScanMode mode, bool intensityEnable
     _impl->configure(scanLengthMm, mode, intensityEnabled, uniformSpacingEnabled, exposureUs);
 }
 
+void Gocator::setScanLengthMm(double length)
+{
+    _impl->setParameterValue(ParameterTarget::Scanner, SCAN_LENGTH_PARAMETER_PATH, std::to_string(length));
+}
+
+void Gocator::setScanMode(ScanMode mode)
+{
+    const int value = (mode == ScanMode::SurfaceMode) ? 3 : 2;
+    _impl->setParameterValue(ParameterTarget::Scanner, SCAN_MODE_PARAMETER_PATH, std::to_string(value));
+}
+
+void Gocator::setExposureUs(int exposure)
+{
+    _impl->setParameterValue(ParameterTarget::Sensor, EXPOSURE_PARAMETER_PATH, std::to_string(exposure));
+}
+
+void Gocator::setIntensityEnabled(bool enable)
+{
+    _impl->setParameterValue(ParameterTarget::Scanner, INTENSITY_PARAMETER_PATH, enable ? "true" : "false");
+}
+
+void Gocator::setUniformSpacingEnabled(bool enable)
+{
+    _impl->setParameterValue(ParameterTarget::Scanner, UNIFORM_SPACING_PARAMETER_PATH, enable ? "true" : "false");
+}
+
 void Gocator::grab(size_t frames)
 {
     _impl->grab(frames);
@@ -516,12 +572,12 @@ Gocator::DeviceInfo Gocator::getConnectedDeviceInfo() const
     return info;
 }
 
-std::string Gocator::getParametersSchema(const std::string& type) const
+std::string Gocator::getParametersSchema(ParameterTarget target) const
 {
     if (!_impl->isOpened.load()) return "{}";
     try
     {
-        std::string path = (type == "scanner") ? _impl->getScannerPath() : _impl->getSensorPath();
+        const std::string path = _impl->getParameterTargetPath(target);
         return _impl->resources->schema(path).ToString();
     }
     catch (const std::exception& e)
@@ -531,12 +587,12 @@ std::string Gocator::getParametersSchema(const std::string& type) const
     return "{}";
 }
 
-std::string Gocator::getParametersData(const std::string& type) const
+std::string Gocator::getParametersData(ParameterTarget target) const
 {
     if (!_impl->isOpened.load()) return "{}";
     try
     {
-        std::string path = (type == "scanner") ? _impl->getScannerPath() : _impl->getSensorPath();
+        const std::string path = _impl->getParameterTargetPath(target);
         return _impl->resources->data(path).ToString();
     }
     catch (const std::exception& e)
@@ -546,18 +602,22 @@ std::string Gocator::getParametersData(const std::string& type) const
     return "{}";
 }
 
+void Gocator::setParameterValue(ParameterTarget target, const std::string& path, const std::string& jsonValue)
+{
+    _impl->setParameterValue(target, path, jsonValue);
+}
+
+std::string Gocator::getParametersSchema(const std::string& type) const
+{
+    return getParametersSchema(parameterTargetFromString(type));
+}
+
+std::string Gocator::getParametersData(const std::string& type) const
+{
+    return getParametersData(parameterTargetFromString(type));
+}
+
 void Gocator::setParameterValue(const std::string& type, const std::string& path, const std::string& jsonValue)
 {
-    if (!_impl->isOpened.load()) return;
-    try
-    {
-        std::string resPath = (type == "scanner") ? _impl->getScannerPath() : _impl->getSensorPath();
-        GoPxLSdk::GoJson patch;
-        patch.Set(path, GoPxLSdk::GoJson(jsonValue));
-        _impl->resources->setJson(resPath, patch);
-    }
-    catch (const std::exception& e)
-    {
-        std::cerr << "setParameterValue failed: " << e.what() << " (path: " << path << ", val: " << jsonValue << ")" << std::endl;
-    }
+    setParameterValue(parameterTargetFromString(type), path, jsonValue);
 }

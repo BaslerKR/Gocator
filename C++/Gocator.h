@@ -36,6 +36,11 @@ public:
         SurfaceMode = 1
     };
 
+    enum class ParameterTarget {
+        Scanner,
+        Sensor
+    };
+
     using StatusCallback = std::function<void(Status status, bool on)>;
     CallbackId registerStatusCallback(StatusCallback cb);
     bool deregisterStatusCallback(CallbackId id);
@@ -53,6 +58,16 @@ public:
     void close();
 
     void configure(double scanLengthMm, ScanMode mode, bool intensityEnabled, bool uniformSpacingEnabled, int exposureUs);
+
+    void setScanLengthMm(double length);
+    void setScanMode(ScanMode mode);
+    void setExposureUs(int exposure);
+    void setIntensityEnabled(bool enable);
+    void setUniformSpacingEnabled(bool enable);
+
+    std::string getParametersSchema(ParameterTarget target) const;
+    std::string getParametersData(ParameterTarget target) const;
+    void setParameterValue(ParameterTarget target, const std::string& path, const std::string& jsonValue);
 
     std::string getParametersSchema(const std::string& type) const;
     std::string getParametersData(const std::string& type) const;

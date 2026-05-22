@@ -9,14 +9,14 @@ Keep the public Gocator facade, low-level SDK helpers, and Qt widgets separated 
 ## Structure
 
 - `GoPxL-SDK/`: local SDK copy.
-- `C++/Gocator.*`: public GoPxL system endpoint facade used by GraphicsEngine.
+- `C++/Gocator.*`: public GoPxL system endpoint facade used by GraphicsEngine. Owns device lifecycle, discovery, GDP receive, typed scan/exposure parameter setters, and scanner/sensor parameter target mapping.
 - `C++/GocatorTypes.h`: neutral connection constants and config.
 - `C++/Internal/GocatorConnection.*`: SDK runtime, manual IP connection, and lifecycle wrapper.
 - `C++/Internal/GocatorDiscovery.*`: device discovery and manual target config.
 - `C++/Internal/GocatorAcquisition.*`: GDP single-frame acquisition wrapper.
 - `C++/Internal/GocatorSettingsManager.*`: REST read/update/call and scan output setup.
 - `C++/Internal/GocatorResourceClient.*`: REST resource access wrapper.
-- `C++/Utility/Qt/QGocatorWidget.*`: Qt control widget aligned with Camera widget metrics.
+- `C++/Utility/Qt/QGocatorWidget.*`: Qt control widget aligned with Camera widget metrics. Owns UI state and dynamic parameter tree rendering; delegates device writes through `Gocator`.
 - `src/main.cpp`: combined CLI/UI entry point.
 - `src/cli_main.cpp`: CLI logic.
 - `src/ui_main.cpp`: Qt Widgets debug UI logic.

@@ -53,7 +53,7 @@ private slots:
 
 private:
     struct FeatureMapping {
-        QString type; // "scanner" or "sensor"
+        Gocator::ParameterTarget target;
         QString path; // JSON pointer path
     };
 
@@ -61,7 +61,7 @@ private:
     void applyConnectionState(bool opened);
     void populateFeatures();
     void clearFeatures();
-    void addFeatureNode(class QTreeWidgetItem* parentItem, const QString& type, const QString& basePath, const QString& name, const class QJsonObject& propSchema, const class QJsonObject& valuesObj);
+    void addFeatureNode(class QTreeWidgetItem* parentItem, Gocator::ParameterTarget target, const QString& basePath, const QString& name, const class QJsonObject& propSchema, const class QJsonObject& valuesObj);
     void updateFeatureValues();
 
     Gocator *_gocator = nullptr;

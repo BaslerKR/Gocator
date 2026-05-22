@@ -582,7 +582,7 @@ void QGocatorWidget::setScanLengthMm(double length)
     _pendingParams[path] = length;
     if (_gocator && _gocator->isOpened())
     {
-        _gocator->setParameterValue("scanner", path.toStdString(), std::to_string(length));
+        _gocator->setScanLengthMm(length);
         populateFeatures();
     }
 }
@@ -594,7 +594,7 @@ void QGocatorWidget::setScanMode(Gocator::ScanMode mode)
     _pendingParams[path] = val;
     if (_gocator && _gocator->isOpened())
     {
-        _gocator->setParameterValue("scanner", path.toStdString(), std::to_string(val));
+        _gocator->setScanMode(mode);
         populateFeatures();
     }
 }
@@ -605,7 +605,7 @@ void QGocatorWidget::setExposureUs(int exposure)
     _pendingParams[path] = exposure;
     if (_gocator && _gocator->isOpened())
     {
-        _gocator->setParameterValue("sensor", path.toStdString(), std::to_string(exposure));
+        _gocator->setExposureUs(exposure);
         populateFeatures();
     }
 }
@@ -616,7 +616,7 @@ void QGocatorWidget::setIntensityEnabled(bool enable)
     _pendingParams[path] = enable;
     if (_gocator && _gocator->isOpened())
     {
-        _gocator->setParameterValue("scanner", path.toStdString(), enable ? "true" : "false");
+        _gocator->setIntensityEnabled(enable);
         populateFeatures();
     }
 }
@@ -627,7 +627,7 @@ void QGocatorWidget::setUniformSpacingEnabled(bool enable)
     _pendingParams[path] = enable;
     if (_gocator && _gocator->isOpened())
     {
-        _gocator->setParameterValue("scanner", path.toStdString(), enable ? "true" : "false");
+        _gocator->setUniformSpacingEnabled(enable);
         populateFeatures();
     }
 }
@@ -645,10 +645,10 @@ void QGocatorWidget::populateFeatures()
     _updatingFeatures = true;
     clearFeatures();
 
-    QString scannerSchemaStr = QString::fromStdString(_gocator->getParametersSchema("scanner"));
-    QString scannerDataStr = QString::fromStdString(_gocator->getParametersData("scanner"));
-    QString sensorSchemaStr = QString::fromStdString(_gocator->getParametersSchema("sensor"));
-    QString sensorDataStr = QString::fromStdString(_gocator->getParametersData("sensor"));
+    QString scannerSchemaStr = QString::fromStdString(_gocator->getParametersSchema(Gocator::ParameterTarget::Scanner));
+    QString scannerDataStr = QString::fromStdString(_gocator->getParametersData(Gocator::ParameterTarget::Scanner));
+    QString sensorSchemaStr = QString::fromStdString(_gocator->getParametersSchema(Gocator::ParameterTarget::Sensor));
+    QString sensorDataStr = QString::fromStdString(_gocator->getParametersData(Gocator::ParameterTarget::Sensor));
 
     QJsonObject scannerSchema = QJsonDocument::fromJson(scannerSchemaStr.toUtf8()).object();
     QJsonObject scannerData = QJsonDocument::fromJson(scannerDataStr.toUtf8()).object();
@@ -681,7 +681,7 @@ void QGocatorWidget::populateFeatures()
         QJsonObject subProps = parametersSchema.value(QStringLiteral("properties")).toObject();
         for (auto it = subProps.begin(); it != subProps.end(); ++it)
         {
-            addFeatureNode(scannerCategory, QStringLiteral("scanner"), QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
+            addFeatureNode(scannerCategory, Gocator::ParameterTarget::Scanner, QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
         }
         scannerCategory->setExpanded(false);
     }
@@ -699,7 +699,7 @@ void QGocatorWidget::populateFeatures()
         QJsonObject subProps = parametersSchema.value(QStringLiteral("properties")).toObject();
         for (auto it = subProps.begin(); it != subProps.end(); ++it)
         {
-            addFeatureNode(sensorCategory, QStringLiteral("sensor"), QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
+            addFeatureNode(sensorCategory, Gocator::ParameterTarget::Sensor, QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
         }
         sensorCategory->setExpanded(false);
     }
@@ -708,7 +708,7 @@ void QGocatorWidget::populateFeatures()
     _updatingFeatures = false;
 }
 
-void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, const QString& type, const QString& basePath, const QString& name, const QJsonObject& propSchema, const QJsonObject& valuesObj)
+void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::ParameterTarget target, const QString& basePath, const QString& name, const QJsonObject& propSchema, const QJsonObject& valuesObj)
 {
     QString propType = propSchema.value(QStringLiteral("type")).toString();
     QString path = basePath + "/" + name;
@@ -738,7 +738,7 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, const QString& 
         QJsonObject subValues = valuesObj.value(name).toObject();
         for (auto it = subProperties.begin(); it != subProperties.end(); ++it)
         {
-            addFeatureNode(groupItem, type, path, it.key(), it.value().toObject(), subValues);
+            addFeatureNode(groupItem, target, path, it.key(), it.value().toObject(), subValues);
         }
         groupItem->setExpanded(false);
     }
@@ -850,7 +850,7 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, const QString& 
             item->setSizeHint(0, QSize(0, height));
             item->setSizeHint(1, QSize(0, height));
             _featuresWidget->setItemWidget(item, 1, editorWidget);
-            _widgetToFeatureMap.insert(editorWidget, FeatureMapping{type, path});
+            _widgetToFeatureMap.insert(editorWidget, FeatureMapping{target, path});
         }
     }
 }
@@ -901,14 +901,14 @@ void QGocatorWidget::onParameterChanged()
             jsonValueStr = "\"" + jsonVal.toString() + "\"";
         }
 
-        std::string type = mapping.type.toStdString();
+        Gocator::ParameterTarget target = mapping.target;
         std::string path = mapping.path.toStdString();
         std::string valStr = jsonValueStr.toStdString();
 
-        auto future = QtConcurrent::run([this, type, path, valStr]() {
+        auto future = QtConcurrent::run([this, target, path, valStr]() {
             if (_gocator)
             {
-                _gocator->setParameterValue(type, path, valStr);
+                _gocator->setParameterValue(target, path, valStr);
             }
         });
         _paramWatcher.setFuture(future);
@@ -927,8 +927,8 @@ void QGocatorWidget::updateFeatureValues()
     auto future = QtConcurrent::run([this]() -> DataResult {
         if (!_gocator) return {};
         return {
-            QString::fromStdString(_gocator->getParametersData("scanner")),
-            QString::fromStdString(_gocator->getParametersData("sensor"))
+            QString::fromStdString(_gocator->getParametersData(Gocator::ParameterTarget::Scanner)),
+            QString::fromStdString(_gocator->getParametersData(Gocator::ParameterTarget::Sensor))
         };
     });
 
@@ -965,7 +965,7 @@ void QGocatorWidget::updateFeatureValues()
             }
 
             QStringList segments = relativePath.split(QStringLiteral("/"));
-            QJsonObject currentObj = (mapping.type == QStringLiteral("scanner")) ? scannerParams : sensorParams;
+            QJsonObject currentObj = (mapping.target == Gocator::ParameterTarget::Scanner) ? scannerParams : sensorParams;
             QJsonValue targetVal;
 
             for (int i = 0; i < segments.size(); ++i)
