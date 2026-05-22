@@ -229,7 +229,7 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
 
         for (const auto& device : devices)
         {
-            QString text = QString::fromStdString(formatDeviceName(device.model, device.serial, device.address));
+            QString text = QString::fromStdString(formatDeviceName(device.model, device.serial, device.address, device.isVirtual));
             _ipCombo->addItem(text, QString::fromStdString(device.address));
         }
 

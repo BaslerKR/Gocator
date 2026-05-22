@@ -435,7 +435,8 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices()
         result.reserve(devices.size());
         for (const auto& d : devices)
         {
-            result.push_back({d.address, d.deviceModel, std::to_string(d.serialNumber)});
+            bool isVirt = (d.serialNumber == 0 || d.deviceModel.empty() || d.webPort == 8100);
+            result.push_back({d.address, d.deviceModel, std::to_string(d.serialNumber), isVirt});
         }
     }
     catch (const std::exception& e)
