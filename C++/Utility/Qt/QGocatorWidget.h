@@ -68,6 +68,7 @@ private:
     Gocator *_gocator = nullptr;
     Gocator::CallbackId _statusCallbackId = 0;
     bool _shuttingDown = false;
+    bool _connectionAttempted = false;
 
     QComboBox *_ipCombo = nullptr;
     QToolButton *_toolRefresh = nullptr;

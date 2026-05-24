@@ -114,5 +114,5 @@ int main()
 > 실시간 3D 취득은 대역폭 소모가 극심합니다. 매 프레임마다 Grab 콜백 내에서 `std::cout` 로그를 무분별하게 유발할 경우 스레드 동기화 락으로 인한 성능 저하 및 패킷 드랍이 발생합니다. 프레임 갱신 주기는 별도 통계 스레드에서 정주기 출력하는 구조로 가져가야 합니다.
 
 > [!TIP]
-> **통합 상태바 스타일 규격**
-> UI를 구현하거나 확장할 때 `Disconnected` / `Connected` / `Live` 표시용 상태 인디케이터 버블의 기하학적 형태는 Camera 모듈의 `QCameraWidget`에 내장된 표시 등 규격과 정확히 일치되도록 설계되어 있습니다. GUI 에셋의 조화를 위해 해당 CSS Property 값을 임의 변경하지 않는 것을 권장합니다.
+> **Unified status-bar style contract**
+> When implementing or extending UI, keep the geometry of the `Idle` / `Disconnected` / `Connected` / `Live` status indicator bubble aligned with the Camera module's `QCameraWidget`. The shared dynamic CSS property (`status`) should stay compatible with the Resources module style map.

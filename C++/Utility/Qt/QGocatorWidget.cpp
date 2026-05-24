@@ -328,6 +328,7 @@ void QGocatorWidget::onConnectToggled(bool toggled)
 {
     if (!_gocator || _shuttingDown) return;
 
+    _connectionAttempted = true;
     setConnectionOperationActive(true);
     if (toggled)
     {
@@ -412,6 +413,11 @@ void QGocatorWidget::setConnectionOperationActive(bool active)
 void QGocatorWidget::applyConnectionState(bool opened)
 {
     if (_shuttingDown) return;
+
+    if (opened)
+    {
+        _connectionAttempted = true;
+    }
 
     _ipCombo->setEnabled(!opened);
     _toolRefresh->setEnabled(!opened);
@@ -523,7 +529,10 @@ void QGocatorWidget::updateStatusBubble()
 
     const bool opened = _gocator && _gocator->isOpened();
 
-    if (!opened) {
+    if (!opened && !_connectionAttempted) {
+        _statusLabel->setText(tr("Idle"));
+        _statusLabel->setProperty("status", "idle");
+    } else if (!opened) {
         _statusLabel->setText(tr("Disconnected"));
         _statusLabel->setProperty("status", "disconnected");
     } else if (_grabbing) {
