@@ -353,7 +353,7 @@ void QGocatorWidget::onConnectToggled(bool toggled)
 void QGocatorWidget::onGrabOneClicked()
 {
     if (!_gocator || _shuttingDown) return;
-    setStatus(QStringLiteral("Starting"));
+    showStatusMessage(tr("Starting single grab..."), false, 0);
     _gocator->configure(scanLengthMm(), scanMode(), intensityEnabled(), uniformSpacingEnabled(), exposureUs());
     _gocator->grab(1);
 }
@@ -364,12 +364,13 @@ void QGocatorWidget::onGrabLiveToggled(bool toggled)
 
     if (toggled)
     {
-        setStatus(QStringLiteral("Starting"));
+        showStatusMessage(tr("Starting live grab..."), false, 0);
         _gocator->configure(scanLengthMm(), scanMode(), intensityEnabled(), uniformSpacingEnabled(), exposureUs());
         _gocator->grab();
     }
     else
     {
+        showStatusMessage(tr("Stopping grab..."), false, 0);
         _gocator->stop();
     }
 }
@@ -382,6 +383,9 @@ void QGocatorWidget::handleStatusChanged(Gocator::Status status, bool on)
     {
         updateGrabState(on);
         setRunningState(on);
+        showStatusMessage(on ? tr("Grabbing started.") : tr("Grabbing stopped."),
+                          false,
+                          on ? 0 : 3000);
 
         QSignalBlocker blocker(_toolGrabLive);
         _toolGrabLive->setChecked(on);
@@ -931,7 +935,7 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
             item->setSizeHint(0, QSize(0, height));
             item->setSizeHint(1, QSize(0, height));
             _featuresWidget->setItemWidget(item, 1, editorWidget);
-            _widgetToFeatureMap.insert(editorWidget, FeatureMapping{target, path});
+            _widgetToFeatureMap.insert(editorWidget, FeatureMapping{target, path, displayName});
         }
     }
 }
@@ -985,6 +989,10 @@ void QGocatorWidget::onParameterChanged()
         Gocator::ParameterTarget target = mapping.target;
         std::string path = mapping.path.toStdString();
         std::string valStr = jsonValueStr.toStdString();
+
+        showStatusMessage(tr("Updating parameter '%1' to %2...").arg(mapping.label, jsonValueStr),
+                          false,
+                          3000);
 
         auto future = QtConcurrent::run([this, target, path, valStr]() {
             if (_gocator)

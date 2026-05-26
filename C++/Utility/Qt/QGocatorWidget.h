@@ -56,6 +56,7 @@ private:
     struct FeatureMapping {
         Gocator::ParameterTarget target;
         QString path; // JSON pointer path
+        QString label;
     };
 
     void setConnectionOperationActive(bool active);

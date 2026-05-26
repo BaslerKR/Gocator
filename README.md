@@ -116,3 +116,8 @@ int main()
 > [!TIP]
 > **Unified status-bar style contract**
 > When implementing or extending UI, keep the geometry of the `Idle` / `Disconnected` / `Connected` / `Live` status indicator bubble aligned with the Camera module's `QCameraWidget`. The shared dynamic CSS property (`status`) should stay compatible with the Resources module style map.
+>
+> `QGocatorWidget` also owns transient operation feedback in its status-bar message field:
+> - Grab requests report startup or stop progress, then `GrabbingStatus` callbacks report the effective started/stopped transition.
+> - Parameter editors report the requested label and value when an asynchronous update is submitted.
+> - A parameter update message indicates submission, not confirmed device acceptance, because the current facade setter does not return an apply result to the widget.
