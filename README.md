@@ -121,3 +121,7 @@ int main()
 > - Grab requests report startup or stop progress, then `GrabbingStatus` callbacks report the effective started/stopped transition.
 > - Parameter editors report the requested label and value when an asynchronous update is submitted.
 > - A parameter update message indicates submission, not confirmed device acceptance, because the current facade setter does not return an apply result to the widget.
+
+> [!TIP]
+> **Host log forwarding contract**
+> `Gocator::syslog()` writes one complete `[Gocator]` record to `std::cout` or `std::cerr` and flushes the selected stream immediately. Host stream redirectors such as Playground's `LogManager` can therefore display lifecycle and operation feedback without waiting for buffered output.

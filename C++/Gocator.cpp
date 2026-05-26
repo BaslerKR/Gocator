@@ -728,12 +728,7 @@ void Gocator::setParameterValue(const std::string& type, const std::string& path
 
 void Gocator::syslog(const std::string& message, bool warning)
 {
-    if (!warning)
-    {
-        std::cout << "[Gocator] " << message << std::endl;
-    }
-    else
-    {
-        std::cerr << "[Gocator] " << message << std::endl;
-    }
+    const std::string line = "[Gocator] " + message + '\n';
+    std::ostream& stream = warning ? std::cerr : std::cout;
+    stream << line << std::flush;
 }
