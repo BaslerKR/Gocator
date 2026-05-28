@@ -86,6 +86,7 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     , _gocator(gocator)
 {
     setWindowTitle(QStringLiteral("LMI Gocator Control"));
+    setMinimumSize(300, 350);
 
     auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
