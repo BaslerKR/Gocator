@@ -38,9 +38,41 @@ target_include_directories(gocator_core
         "${GOPXL_SDK_DIR}/include/GoPxLSdk"
 )
 
+if(NOT DEFINED GOPXL_PLATFORM_DIR)
+    if(APPLE)
+        set(GOPXL_PLATFORM_DIR "apple_silicon")
+    elseif(WIN32)
+        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+            set(GOPXL_PLATFORM_DIR "win64d")
+        else()
+            set(GOPXL_PLATFORM_DIR "win64")
+        endif()
+    elseif(UNIX AND NOT APPLE)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+            if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+                set(GOPXL_PLATFORM_DIR "linux_arm64d")
+            else()
+                set(GOPXL_PLATFORM_DIR "linux_arm64")
+            endif()
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
+            if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+                set(GOPXL_PLATFORM_DIR "linux_arm7d")
+            else()
+                set(GOPXL_PLATFORM_DIR "linux_arm7")
+            endif()
+        else()
+            if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+                set(GOPXL_PLATFORM_DIR "linux_x64d")
+            else()
+                set(GOPXL_PLATFORM_DIR "linux_x64")
+            endif()
+        endif()
+    endif()
+endif()
+
 target_link_directories(gocator_core
     PUBLIC
-        "${GOPXL_SDK_DIR}/lib"
+        "${GOPXL_SDK_DIR}/lib/${GOPXL_PLATFORM_DIR}"
 )
 
 target_link_libraries(gocator_core
@@ -69,8 +101,8 @@ set(gocator_runtime_targets
 
 foreach(target ${gocator_runtime_targets})
     set_target_properties(${target} PROPERTIES
-        BUILD_RPATH "${GOPXL_SDK_DIR}/lib"
-        INSTALL_RPATH "@executable_path/../GoPxL-SDK/lib"
+        BUILD_RPATH "${GOPXL_SDK_DIR}/lib/${GOPXL_PLATFORM_DIR}"
+        INSTALL_RPATH "@executable_path/../GoPxL-SDK/lib/${GOPXL_PLATFORM_DIR}"
     )
 endforeach()
 
