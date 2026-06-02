@@ -89,8 +89,7 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     setMinimumSize(300, 350);
 
     auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
-    mainLayout->setSpacing(0);
+    mainLayout->setObjectName(QStringLiteral("DeviceRootLayout"));
 
     // IP selection & Control tools (Same layout style as QCameraWidget)
     _ipCombo = new QComboBox(this);
@@ -138,27 +137,25 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     }
 
     auto *ipLayout = new QHBoxLayout;
-    ipLayout->setContentsMargins(0, 0, 0, 0);
-    ipLayout->setSpacing(8);
+    ipLayout->setObjectName(QStringLiteral("DeviceSelectorLayout"));
     ipLayout->addWidget(_ipCombo);
     ipLayout->addWidget(_toolRefresh);
 
     auto *toolLayout = new QHBoxLayout;
-    toolLayout->setContentsMargins(0, 0, 0, 0);
-    toolLayout->setSpacing(6);
+    toolLayout->setObjectName(QStringLiteral("DeviceToolLayout"));
     toolLayout->addWidget(_toolConnect);
     toolLayout->addWidget(_toolGrabOne);
     toolLayout->addWidget(_toolGrabLive);
 
     auto *topBarLayout = new QHBoxLayout;
-    topBarLayout->setContentsMargins(12, 12, 12, 12);
-    topBarLayout->setSpacing(10);
+    topBarLayout->setObjectName(QStringLiteral("DeviceTopBarLayout"));
     topBarLayout->addLayout(ipLayout);
     topBarLayout->addLayout(toolLayout);
 
     // Param Tree (Same widget style as QCameraWidget Features Tree)
     _featuresWidget = new QTreeWidget(this);
     _featuresWidget->setObjectName(QStringLiteral("GocatorFeaturesTree"));
+    _featuresWidget->setProperty("treeRole", QStringLiteral("DeviceFeatureTree"));
     _featuresWidget->setHeaderLabels(QStringList() << QStringLiteral("Feature") << QStringLiteral("Value"));
     _featuresWidget->setRootIsDecorated(true);
     _featuresWidget->setAnimated(false);
@@ -173,8 +170,7 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     _featuresWidget->header()->resizeSection(0, 200);
 
     auto *treeLayout = new QVBoxLayout;
-    treeLayout->setContentsMargins(12, 0, 12, 12);
-    treeLayout->setSpacing(8);
+    treeLayout->setObjectName(QStringLiteral("DeviceTreePanelLayout"));
     treeLayout->addWidget(_featuresWidget);
 
     mainLayout->addLayout(topBarLayout);
@@ -183,7 +179,6 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     // Status Bar (Same style as QCameraWidget StatusBar)
     _statusBar = new QStatusBar(this);
     _statusBar->setObjectName(QStringLiteral("GocatorStatusBar"));
-    _statusBar->setContentsMargins(0, 0, 0, 0);
 
     _statusLabel = new QLabel(this);
     _statusLabel->setObjectName(QStringLiteral("GocatorStatusLabel"));
