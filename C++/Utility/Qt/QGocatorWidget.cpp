@@ -179,6 +179,7 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     // Status Bar (Same style as QCameraWidget StatusBar)
     _statusBar = new QStatusBar(this);
     _statusBar->setObjectName(QStringLiteral("GocatorStatusBar"));
+    _statusBar->setSizeGripEnabled(false);
 
     _statusLabel = new QLabel(this);
     _statusLabel->setObjectName(QStringLiteral("GocatorStatusLabel"));
