@@ -42,7 +42,12 @@ public:
     void setExposureUs(int exposure);
     void setIntensityEnabled(bool enable);
     void setUniformSpacingEnabled(bool enable);
+    void setDiscoveredDevices(const std::vector<Gocator::DeviceInfo>& devices);
     void prepareForShutdown();
+
+signals:
+    void discoveryStarted();
+    void discoveryFinished();
 
 private slots:
     void onRefreshClicked();
@@ -68,6 +73,7 @@ private:
     void applyConnectionState(bool opened);
     void populateFeatures();
     void clearFeatures();
+    void applyDiscoveredDevices(const std::vector<Gocator::DeviceInfo>& devices);
     void addFeatureNode(class QTreeWidgetItem* parentItem, Gocator::ParameterTarget target, const QString& basePath, const QString& name, const class QJsonObject& propSchema, const class QJsonObject& valuesObj);
     void updateFeatureValues();
     void applyFeatureValues(const FeatureDataResult& result);

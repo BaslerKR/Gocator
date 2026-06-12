@@ -227,42 +227,8 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     connect(&_discoverWatcher, &QFutureWatcher<std::vector<Gocator::DeviceInfo>>::finished, this, [this]() {
         if (_shuttingDown) return;
         std::vector<Gocator::DeviceInfo> devices = _discoverWatcher.result();
-        
-        QString currentAddress = ipAddress();
-        _ipCombo->clear();
-
-        if (devices.empty())
-        {
-            setStatus(QStringLiteral("No devices found"));
-            if (!currentAddress.isEmpty())
-            {
-                _ipCombo->setEditText(currentAddress);
-            }
-            else
-            {
-                _ipCombo->setEditText(QStringLiteral("192.168.1.10"));
-            }
-            _toolRefresh->setEnabled(true);
-            _toolConnect->setEnabled(true);
-            return;
-        }
-
-        for (const auto& device : devices)
-        {
-            QString text = QString::fromStdString(formatDeviceName(device.model, device.serial, device.address, device.isVirtual));
-            _ipCombo->addItem(text, QString::fromStdString(device.address));
-        }
-
-        if (!currentAddress.isEmpty())
-        {
-            int index = _ipCombo->findData(currentAddress);
-            if (index >= 0) _ipCombo->setCurrentIndex(index);
-            else _ipCombo->setEditText(currentAddress);
-        }
-
-        setStatus(QStringLiteral("Discovered %1 devices").arg(devices.size()));
-        _toolRefresh->setEnabled(true);
-        _toolConnect->setEnabled(true);
+        applyDiscoveredDevices(devices);
+        emit discoveryFinished();
     });
 
     connect(&_paramWatcher, &QFutureWatcher<void>::finished, this, [this]() {
@@ -324,16 +290,56 @@ void QGocatorWidget::prepareForShutdown()
 void QGocatorWidget::onRefreshClicked()
 {
     if (!_gocator || _shuttingDown) return;
+    if (_discoverWatcher.isRunning()) return;
 
     _toolRefresh->setEnabled(false);
     _toolConnect->setEnabled(false);
     setStatus(QStringLiteral("Discovering"));
+    emit discoveryStarted();
 
     auto future = QtConcurrent::run([this]() {
         if (!_gocator) return std::vector<Gocator::DeviceInfo>();
         return _gocator->discoverDevices();
     });
     _discoverWatcher.setFuture(future);
+}
+
+void QGocatorWidget::setDiscoveredDevices(const std::vector<Gocator::DeviceInfo>& devices)
+{
+    if (_shuttingDown) return;
+    applyDiscoveredDevices(devices);
+}
+
+void QGocatorWidget::applyDiscoveredDevices(const std::vector<Gocator::DeviceInfo>& devices)
+{
+    QString currentAddress = ipAddress();
+    _ipCombo->clear();
+
+    if (devices.empty())
+    {
+        setStatus(QStringLiteral("No devices found"));
+        _ipCombo->setEditText(currentAddress.isEmpty() ? QStringLiteral("192.168.1.10") : currentAddress);
+        _toolRefresh->setEnabled(true);
+        _toolConnect->setEnabled(true);
+        return;
+    }
+
+    for (const auto& device : devices)
+    {
+        QString text = QString::fromStdString(formatDeviceName(device.model, device.serial, device.address, device.isVirtual));
+        _ipCombo->addItem(text, QString::fromStdString(device.address));
+    }
+
+    if (!currentAddress.isEmpty())
+    {
+        int index = _ipCombo->findData(currentAddress);
+        if (index >= 0) _ipCombo->setCurrentIndex(index);
+        else _ipCombo->setEditText(currentAddress);
+    }
+
+    setStatus(QStringLiteral("Discovered %1 devices").arg(devices.size()));
+    _toolRefresh->setEnabled(true);
+    _toolConnect->setEnabled(true);
 }
 
 void QGocatorWidget::onConnectToggled(bool toggled)
