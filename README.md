@@ -1,7 +1,7 @@
 # 🔍 Gocator Module
 
 [![C++ Standard](https://img.shields.io/badge/C%2B%2B-17%20%2F%2020-blue.svg?style=flat-square)](https://en.cppreference.com/w/cpp/compiler_support)
-[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-lightgrey.svg?style=flat-square)](#)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg?style=flat-square)](#)
 [![Dependency](https://img.shields.io/badge/SDK-GoPxL%20SDK-orange.svg?style=flat-square)](https://lmi3d.com/)
 [![UI Integration](https://img.shields.io/badge/UI-Qt6-green.svg?style=flat-square)](https://www.qt.io/)
 
@@ -54,7 +54,7 @@ graph LR
 
 | Requirement | Description |
 | :--- | :--- |
-| **OS Support** | macOS 12+ / Windows 10+ |
+| **OS Support** | Windows 10+ / Linux / macOS 12+ |
 | **C++ Standard** | C++17 이상 필수 |
 | **LMI GoPxL SDK** | `modules/Gocator/GoPxL-SDK/` 하위에 해당 타겟 OS용 GoPxL SDK 구성이 선행되어야 함 |
 | **Qt Framework** | Qt 6.x (Core, Gui, Widgets) *[선택 사항, UI 위젯 활성 시]* |
@@ -68,7 +68,7 @@ graph LR
 
 ```cmake
 # Add module target
-add_subdirectory(modules/Gocator)
+add_subdirectory(modules/Gocator/C++)
 
 # Link to host target
 target_link_libraries(YourHostApp PRIVATE Gocator)
