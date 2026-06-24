@@ -927,7 +927,8 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
         if (editorWidget)
         {
             editorWidget->setObjectName(QStringLiteral("gocatorFeature_") + name);
-            const int height = editorWidget->sizeHint().height();
+            editorWidget->ensurePolished();
+            const int height = qMin(editorWidget->sizeHint().height(), editorWidget->maximumHeight());
             item->setSizeHint(0, QSize(0, height));
             item->setSizeHint(1, QSize(0, height));
             _featuresWidget->setItemWidget(item, 1, editorWidget);
