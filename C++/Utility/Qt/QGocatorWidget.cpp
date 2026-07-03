@@ -188,14 +188,19 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
 
     _messageLabel = new QLabel(this);
     _messageLabel->setObjectName(QStringLiteral("GocatorMessageLabel"));
-    _messageLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    _messageLabel->setProperty("statusRole", "message");
     _messageLabel->setProperty("messageState", "normal");
+    _messageLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    _messageLabel->hide();
     _statusBar->addWidget(_messageLabel, 1);
 
     _messageTimer = new QTimer(this);
     _messageTimer->setSingleShot(true);
     connect(_messageTimer, &QTimer::timeout, this, [this]() {
-        if (_messageLabel) _messageLabel->clear();
+        if (_messageLabel) {
+            _messageLabel->clear();
+            _messageLabel->hide();
+        }
     });
 
     mainLayout->addWidget(_statusBar);
@@ -509,8 +514,10 @@ void QGocatorWidget::showStatusMessage(const QString& msg, bool isError, int tim
 
     _messageTimer->stop();
     _messageLabel->setText(msg);
+    _messageLabel->setToolTip(msg);
     _messageLabel->setProperty("messageState", isError ? "error" : "normal");
     repolish(_messageLabel);
+    _messageLabel->setVisible(!msg.isEmpty());
 
     if (timeout > 0) {
         _messageTimer->start(timeout);
