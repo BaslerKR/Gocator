@@ -96,11 +96,13 @@ private:
     QStatusBar *_statusBar = nullptr;
     QLabel *_messageLabel = nullptr;
     QLabel *_statusLabel = nullptr;
+    QLabel *_loadingLabel = nullptr;
     QTimer *_messageTimer = nullptr;
 
     void showStatusMessage(const QString& msg, bool isError = false, int timeout = 0);
     void updateGrabState(bool grabbing);
     void updateStatusBubble();
+    void setDeviceBusy(bool busy);
 
     QFutureWatcher<bool> _connectWatcher;
     QFutureWatcher<std::vector<Gocator::DeviceInfo>> _discoverWatcher;
@@ -108,6 +110,7 @@ private:
     QFutureWatcher<FeatureDataResult> _featureDataWatcher;
     bool _updatingFeatures = false;
     bool _grabbing = false;
+    bool _deviceBusy = false;
 };
 #endif
 

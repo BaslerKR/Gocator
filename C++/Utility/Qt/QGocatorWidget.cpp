@@ -186,6 +186,11 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     _statusLabel->setAlignment(Qt::AlignCenter);
     _statusBar->addWidget(_statusLabel);
 
+    _loadingLabel = new QLabel(this);
+    _loadingLabel->setObjectName(QStringLiteral("DeviceLoadingLabel"));
+    _loadingLabel->hide();
+    _statusBar->addPermanentWidget(_loadingLabel);
+
     _messageLabel = new QLabel(this);
     _messageLabel->setObjectName(QStringLiteral("GocatorMessageLabel"));
     _messageLabel->setProperty("statusRole", "message");
@@ -233,6 +238,7 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
         if (_shuttingDown) return;
         std::vector<Gocator::DeviceInfo> devices = _discoverWatcher.result();
         applyDiscoveredDevices(devices);
+        setDeviceBusy(false);
         emit discoveryFinished();
     });
 
@@ -244,6 +250,7 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     connect(&_featureDataWatcher, &QFutureWatcher<FeatureDataResult>::finished, this, [this]() {
         if (_shuttingDown || !_gocator) return;
         applyFeatureValues(_featureDataWatcher.result());
+        setDeviceBusy(false);
     });
 
     if (_gocator)
@@ -300,6 +307,7 @@ void QGocatorWidget::onRefreshClicked()
     _toolRefresh->setEnabled(false);
     _toolConnect->setEnabled(false);
     setStatus(QStringLiteral("Discovering"));
+    setDeviceBusy(true);
     emit discoveryStarted();
 
     auto future = QtConcurrent::run([this]() {
@@ -423,6 +431,7 @@ void QGocatorWidget::handleStatusChanged(Gocator::Status status, bool on)
 
 void QGocatorWidget::setConnectionOperationActive(bool active)
 {
+    setDeviceBusy(active);
     if (active)
     {
         _ipCombo->setEnabled(false);
@@ -535,6 +544,16 @@ void QGocatorWidget::updateStatusBubble()
     if (!_statusLabel || _shuttingDown) return;
 
     const bool opened = _gocator && _gocator->isOpened();
+
+    if (_deviceBusy) {
+        if (_loadingLabel) {
+            _loadingLabel->show();
+        }
+    } else {
+        if (_loadingLabel) {
+            _loadingLabel->hide();
+        }
+    }
 
     if (!opened && !_connectionAttempted) {
         _statusLabel->setText(tr("Idle"));
@@ -1011,6 +1030,7 @@ void QGocatorWidget::onParameterChanged()
                 gocator->setParameterValue(target, path, valStr);
             }
         });
+        setDeviceBusy(true);
         _paramWatcher.setFuture(future);
     }
 }
@@ -1113,5 +1133,10 @@ void QGocatorWidget::applyFeatureValues(const FeatureDataResult& result)
     }
 
     _updatingFeatures = false;
+}
+void QGocatorWidget::setDeviceBusy(bool busy)
+{
+    _deviceBusy = busy;
+    updateStatusBubble();
 }
 #endif
