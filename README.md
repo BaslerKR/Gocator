@@ -115,7 +115,7 @@ int main()
 
 > [!TIP]
 > **Unified status-bar style contract**
-> When implementing or extending UI, keep the geometry of the `Idle` / `Disconnected` / `Connected` / `Live` status indicator bubble aligned with the Camera module's `QCameraWidget`. The shared dynamic CSS property (`status`) should stay compatible with the Resources module style map.
+> When implementing or extending UI, keep the geometry of the `Idle` / `Disconnected` / `Connected` / `Live` status label aligned with the Camera module's `QCameraWidget`. The shared dynamic CSS property (`status`) should stay compatible with the Resources module style map.
 >
 > `QGocatorWidget` also owns transient operation feedback in its status-bar message field:
 > - Grab requests report startup or stop progress, then `GrabbingStatus` callbacks report the effective started/stopped transition.
