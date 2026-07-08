@@ -9,7 +9,6 @@
 #include <QCheckBox>
 #include <QToolButton>
 #include <QTreeWidget>
-#include <QHeaderView>
 #include <QScrollBar>
 #include <QLabel>
 #include <QStatusBar>
@@ -157,17 +156,6 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     _featuresWidget->setObjectName(QStringLiteral("GocatorFeaturesTree"));
     _featuresWidget->setProperty("treeRole", QStringLiteral("DeviceFeatureTree"));
     _featuresWidget->setHeaderLabels(QStringList() << QStringLiteral("Feature") << QStringLiteral("Value"));
-    _featuresWidget->setRootIsDecorated(true);
-    _featuresWidget->setAnimated(false);
-    _featuresWidget->setAlternatingRowColors(true);
-    _featuresWidget->setUniformRowHeights(false);
-    _featuresWidget->setIndentation(18);
-    _featuresWidget->header()->setStretchLastSection(true);
-    _featuresWidget->header()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    _featuresWidget->header()->setSectionResizeMode(0, QHeaderView::Interactive);
-    _featuresWidget->header()->setSectionResizeMode(1, QHeaderView::Stretch);
-    _featuresWidget->header()->setMinimumSectionSize(60);
-    _featuresWidget->header()->resizeSection(0, 200);
 
     auto *treeLayout = new QVBoxLayout;
     treeLayout->setObjectName(QStringLiteral("DeviceTreePanelLayout"));
@@ -772,14 +760,10 @@ void QGocatorWidget::populateFeatures()
     }
 
     QTreeWidgetItem* rootItem = new QTreeWidgetItem(_featuresWidget, QStringList() << rootText);
-    rootItem->setSizeHint(0, QSize(0, 22));
-    rootItem->setSizeHint(1, QSize(0, 22));
 
     // scanner 리소스 전개
     {
         QTreeWidgetItem* scannerCategory = new QTreeWidgetItem(rootItem, QStringList() << QStringLiteral("Scanner"));
-        scannerCategory->setSizeHint(0, QSize(0, 22));
-        scannerCategory->setSizeHint(1, QSize(0, 22));
 
         QJsonObject parametersSchema = scannerSchema.value(QStringLiteral("properties")).toObject()
                                                    .value(QStringLiteral("parameters")).toObject();
@@ -796,8 +780,6 @@ void QGocatorWidget::populateFeatures()
     // sensor 리소스 전개
     {
         QTreeWidgetItem* sensorCategory = new QTreeWidgetItem(rootItem, QStringList() << QStringLiteral("Sensor"));
-        sensorCategory->setSizeHint(0, QSize(0, 22));
-        sensorCategory->setSizeHint(1, QSize(0, 22));
 
         QJsonObject parametersSchema = sensorSchema.value(QStringLiteral("properties")).toObject()
                                                    .value(QStringLiteral("parameters")).toObject();
@@ -839,8 +821,6 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
         {
             groupItem = new QTreeWidgetItem(_featuresWidget, QStringList() << displayName);
         }
-        groupItem->setSizeHint(0, QSize(0, 22));
-        groupItem->setSizeHint(1, QSize(0, 22));
 
         QJsonObject subValues = valuesObj.value(name).toObject();
         for (auto it = subProperties.begin(); it != subProperties.end(); ++it)
@@ -953,10 +933,6 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
         if (editorWidget)
         {
             editorWidget->setObjectName(QStringLiteral("gocatorFeature_") + name);
-            editorWidget->ensurePolished();
-            const int height = qMin(editorWidget->sizeHint().height(), editorWidget->maximumHeight()) + 2;
-            item->setSizeHint(0, QSize(0, height));
-            item->setSizeHint(1, QSize(0, height));
             _featuresWidget->setItemWidget(item, 1, editorWidget);
             _widgetToFeatureMap.insert(editorWidget, FeatureMapping{target, path, displayName});
         }
