@@ -70,9 +70,14 @@ graph LR
 # Add module target
 add_subdirectory(modules/Gocator/C++)
 
-# Link to host target
-target_link_libraries(YourHostApp PRIVATE Gocator)
+# Link to the device core target
+target_link_libraries(YourHostApp PRIVATE gocator_core)
 ```
+
+Hosts that need neutral Scene3D conversion add GraphicsEngine first, set
+`GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER=ON`, and link
+`Gocator::GraphicsEngineAdapter` explicitly. The `gocator_core` target does not
+link GraphicsEngine or VTK.
 
 ### 2. Basic Example
 ```cpp

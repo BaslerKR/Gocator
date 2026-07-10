@@ -337,16 +337,6 @@ GocatorProfileFrame GocatorAcquisition::uniformProfileFrame(const GoPxLSdk::GoGd
     const kArray1 ranges = profile.Ranges();
     const kArray1 intensities = profile.Intensities();
 
-    if (frame.width > 0 && ranges != kNULL)
-    {
-        k16s firstRange = k16S_NULL;
-        kArray1_Item(ranges, 0, &firstRange);
-        frame.firstRange = firstRange;
-        frame.minRange = firstRange;
-        frame.maxRange = firstRange;
-        frame.hasRangeStats = true;
-    }
-
     if (frame.intensityWidth > 0 && intensities != kNULL)
     {
         k16u firstIntensity = 0;
@@ -359,18 +349,27 @@ GocatorProfileFrame GocatorAcquisition::uniformProfileFrame(const GoPxLSdk::GoGd
     for (std::uint32_t i = 0; i < frame.width; ++i)
     {
         k16s range = k16S_NULL;
-        kArray1_Item(ranges, i, &range);
-        
-        if (frame.hasRangeStats)
+        if (ranges != kNULL)
         {
-            frame.minRange = std::min(frame.minRange, static_cast<std::int32_t>(range));
-            frame.maxRange = std::max(frame.maxRange, static_cast<std::int32_t>(range));
+            kArray1_Item(ranges, i, &range);
         }
 
         GocatorProfilePoint& point = frame.points[i];
         point.x = frame.xOffset + frame.xResolution * i;
         if (range != k16S_NULL)
         {
+            if (!frame.hasRangeStats)
+            {
+                frame.firstRange = range;
+                frame.minRange = range;
+                frame.maxRange = range;
+                frame.hasRangeStats = true;
+            }
+            else
+            {
+                frame.minRange = std::min(frame.minRange, static_cast<std::int32_t>(range));
+                frame.maxRange = std::max(frame.maxRange, static_cast<std::int32_t>(range));
+            }
             point.z = frame.zOffset + frame.zResolution * range;
             point.valid = true;
             ++frame.validCount;
@@ -415,16 +414,6 @@ GocatorProfileFrame GocatorAcquisition::pointCloudProfileFrame(const GoPxLSdk::G
     const kArray1 ranges = profile.Ranges();
     const kArray1 intensities = profile.Intensities();
 
-    if (frame.width > 0 && ranges != kNULL)
-    {
-        kPoint16s firstSource = {k16S_NULL, k16S_NULL};
-        kArray1_Item(ranges, 0, &firstSource);
-        frame.firstRange = firstSource.y;
-        frame.minRange = firstSource.y;
-        frame.maxRange = firstSource.y;
-        frame.hasRangeStats = true;
-    }
-
     if (frame.intensityWidth > 0 && intensities != kNULL)
     {
         k16u firstIntensity = 0;
@@ -437,17 +426,26 @@ GocatorProfileFrame GocatorAcquisition::pointCloudProfileFrame(const GoPxLSdk::G
     for (std::uint32_t i = 0; i < frame.width; ++i)
     {
         kPoint16s source = {k16S_NULL, k16S_NULL};
-        kArray1_Item(ranges, i, &source);
-        
-        if (frame.hasRangeStats)
+        if (ranges != kNULL)
         {
-            frame.minRange = std::min(frame.minRange, static_cast<std::int32_t>(source.y));
-            frame.maxRange = std::max(frame.maxRange, static_cast<std::int32_t>(source.y));
+            kArray1_Item(ranges, i, &source);
         }
 
         GocatorProfilePoint& point = frame.points[i];
         if (source.x != k16S_NULL && source.y != k16S_NULL)
         {
+            if (!frame.hasRangeStats)
+            {
+                frame.firstRange = source.y;
+                frame.minRange = source.y;
+                frame.maxRange = source.y;
+                frame.hasRangeStats = true;
+            }
+            else
+            {
+                frame.minRange = std::min(frame.minRange, static_cast<std::int32_t>(source.y));
+                frame.maxRange = std::max(frame.maxRange, static_cast<std::int32_t>(source.y));
+            }
             point.x = frame.xOffset + frame.xResolution * source.x;
             point.z = frame.zOffset + frame.zResolution * source.y;
             point.valid = true;

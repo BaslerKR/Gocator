@@ -228,7 +228,8 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     connect(&_paramWatcher, &QFutureWatcher<void>::finished, this, [this]() {
         if (_shuttingDown) return;
         _parameterUpdateActive = false;
-        setFeatureEditorsEnabled(!_grabbing);
+        setConnectionOperationActive(false);
+        setRunningState(_grabbing);
         updateStatusLabel();
         updateFeatureValues();
     });
@@ -236,6 +237,8 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     connect(&_featureDataWatcher, &QFutureWatcher<FeatureDataResult>::finished, this, [this]() {
         if (_shuttingDown || !_gocator) return;
         applyFeatureValues(_featureDataWatcher.result());
+        setConnectionOperationActive(false);
+        setRunningState(_grabbing);
     });
 
     if (_gocator)
@@ -1000,6 +1003,9 @@ void QGocatorWidget::onParameterChanged()
             }
         });
         _parameterUpdateActive = true;
+        setConnectionOperationActive(true);
+        _toolGrabOne->setEnabled(false);
+        _toolGrabLive->setEnabled(false);
         setFeatureEditorsEnabled(false);
         updateStatusLabel();
         _paramWatcher.setFuture(future);
@@ -1020,6 +1026,10 @@ void QGocatorWidget::updateFeatureValues()
         };
     });
 
+    setConnectionOperationActive(true);
+    _toolGrabOne->setEnabled(false);
+    _toolGrabLive->setEnabled(false);
+    setFeatureEditorsEnabled(false);
     _featureDataWatcher.setFuture(future);
 }
 

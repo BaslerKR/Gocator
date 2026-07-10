@@ -10,6 +10,10 @@ set(CMAKE_MACOSX_RPATH ON)
 set(GOPXL_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../GoPxL-SDK" CACHE PATH "GoPxL SDK root")
 set(GOCATOR_DEFAULT_QT_PREFIX "/opt/Qt/6.7.2/gcc_64" CACHE PATH "Default Qt prefix")
 option(GOCATOR_BUILD_QT_UI "Build Qt Widgets debug UI when Qt is available" ON)
+option(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER
+    "Build the optional Gocator-to-GraphicsEngine adapter target."
+    OFF
+)
 
 if(GOCATOR_BUILD_QT_UI AND NOT CMAKE_PREFIX_PATH AND EXISTS "${GOCATOR_DEFAULT_QT_PREFIX}")
     list(APPEND CMAKE_PREFIX_PATH "${GOCATOR_DEFAULT_QT_PREFIX}")
@@ -106,12 +110,28 @@ foreach(target ${gocator_runtime_targets})
     )
 endforeach()
 
-if(TARGET GraphicsEngine)
-    message(STATUS "[Gocator] GraphicsEngine target detected. Enabling GocatorDataSetScene3DAdapter.")
-    target_sources(gocator_core PRIVATE
+if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
+    if(NOT TARGET GraphicsEngine::GraphicsEngine)
+        message(FATAL_ERROR
+            "[Gocator] GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER=ON requires "
+            "GraphicsEngine::GraphicsEngine. Add GraphicsEngine first or disable the adapter."
+        )
+    endif()
+
+    add_library(GocatorGraphicsEngineAdapter STATIC
         Utility/GraphicsEngine/GocatorDataSetScene3DAdapter.h
         Utility/GraphicsEngine/GocatorDataSetScene3DAdapter.cpp
     )
-    target_link_libraries(gocator_core PUBLIC GraphicsEngine::GraphicsEngine)
-    target_include_directories(gocator_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Utility/GraphicsEngine)
+    add_library(Gocator::GraphicsEngineAdapter ALIAS GocatorGraphicsEngineAdapter)
+    target_compile_features(GocatorGraphicsEngineAdapter PUBLIC cxx_std_17)
+    target_include_directories(GocatorGraphicsEngineAdapter
+        PUBLIC
+            "${CMAKE_CURRENT_SOURCE_DIR}/Utility/GraphicsEngine"
+    )
+    target_link_libraries(GocatorGraphicsEngineAdapter
+        PUBLIC
+            gocator_core
+            GraphicsEngine::GraphicsEngine
+    )
+    message(STATUS "[Gocator] Gocator::GraphicsEngineAdapter enabled.")
 endif()

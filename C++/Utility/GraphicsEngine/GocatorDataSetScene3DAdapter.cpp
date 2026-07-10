@@ -21,13 +21,8 @@
 
 namespace
 {
-#if defined(GRAPHICSENGINE_HAS_OPENMP)
 #define GRAPHICSENGINE_OMP_PARALLEL_FOR _Pragma("omp parallel for")
 #define GRAPHICSENGINE_OMP_PARALLEL_FOR_REDUCTION_SUM _Pragma("omp parallel for reduction(+:validPointCount)")
-#else
-#define GRAPHICSENGINE_OMP_PARALLEL_FOR
-#define GRAPHICSENGINE_OMP_PARALLEL_FOR_REDUCTION_SUM
-#endif
 
 struct StampInfo
 {
