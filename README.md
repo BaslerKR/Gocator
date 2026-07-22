@@ -2,50 +2,47 @@
 
 [![C++ Standard](https://img.shields.io/badge/C%2B%2B-17%20%2F%2020-blue.svg?style=flat-square)](https://en.cppreference.com/w/cpp/compiler_support)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg?style=flat-square)](#)
-[![Dependency](https://img.shields.io/badge/SDK-GoPxL%20SDK-orange.svg?style=flat-square)](https://lmi3d.com/)
-[![UI Integration](https://img.shields.io/badge/UI-Qt6-green.svg?style=flat-square)](https://www.qt.io/)
+[![Dependency](https://img.shields.io/badge/SDK-LMI%20GoPxL%20SDK-orange.svg?style=flat-square)](https://lmi3d.com/)
 
-LMI Gocator 3D 센서의 라이프사이클 제어 및 GoPxL SDK 기반의 고성능 3D 프로파일/표면 데이터 취득을 처리하기 위한 C++ 핵심 라이브러리 모듈입니다.
+LMI Gocator 3D 센서의 라이프사이클 제어 및 GoPxL SDK 기반의 고성능 3D 프로파일/표면 데이터 수신을 처리하기 위한 Pure C++ 이미지 취득(Acquisition) 라이브러리 모듈입니다.
 
 ---
 
 ## 🚀 Key Features
 
-* **Gocator Facade 제어**: 센서 검색(Discovery), 가상/실제 연결 수명주기 관리, Single/Continuous 데이터 Grabbing 및 장치 설정 관리 API를 단일 Facade 인터페이스로 단축 제공합니다.
-* **REST API 속성 제어**: 센서 장치 내장 REST API에 접근해 센서 하드웨어 트래픽 부하 없이 노출값, 레이저 파라미터 등의 원격 장치 설정을 비동기적으로 판독 및 변경합니다.
-* **Qt6 모니터링 컨트롤**: 실시간 장치 정보 모니터링, 데이터 취득 상태 표시등 및 원격 파라미터 트리 파싱 뷰를 내장한 전용 위젯 `QGocatorWidget`을 제공합니다.
-* **표준 로깅 지원**: `Gocator::syslog()`를 통해 외부 라이브러리(예: Playground의 `LogManager`)가 리다이렉트하여 수집할 수 있도록 표준 스트림 형태의 로깅 파이프라인을 구축해 둡니다.
+* **Gocator Facade 수명주기 관리**: 센서 자동 검색(Discovery), 네트워크(IP) 기반 연결, 스캔 모드(Profile/Surface) 설정, Single/Continuous 데이터 Grabbing을 단일 C++ `Gocator` 클래스로 핸들링합니다.
+* **GoPxL SDK 기반 고성능 3D 취득**: LMI 공식 GoPxL SDK(kApi / GoApi / GoPxLSdk)를 래핑하여 초고속 `GoDataSet` 3D 점군 및 2D 강도(Intensity) 데이터를 안전하게 수신합니다.
+* **REST API 속성 제어 통합**: 센서 장치 내장 REST API에 접근해 센서 하드웨어 트래픽 부하 없이 노출 시간(Exposure), 레이저 파라미터, 스캔 영역 등의 원격 장치 설정을 비동기적으로 판독 및 변경합니다.
+* **독립적 로깅 프레임워크**: `Gocator::syslog()`를 통해 외부 라이브러리(예: Playground의 `LogManager`)가 리다이렉트하여 수집할 수 있도록 표준 스트림 기반 로깅을 제공합니다.
 
 ---
 
 ## 📦 Data & Control Pipeline
 
-센서 설정 제어(REST)와 초고속 3D 데이터 취득(GoPxL SDK)의 이중화된 통신 파이프라인 구조입니다.
+센서 설정 제어(REST)와 고속 3D 데이터 취득(GoPxL SDK)의 이중화 통신 구조입니다.
 
 ```mermaid
-graph LR
-    subgraph Host Application
-        App[Host App / Controller]
-        UI[QGocatorWidget]
-    end
+sequenceDiagram
+    participant HostApp as Host Application
+    participant Gocator as Gocator C++ Facade
+    participant REST as REST Resource Client
+    participant SDK as LMI GoPxL SDK
+    participant Sensor as Gocator 3D Hardware
 
-    subgraph Gocator Module
-        Facade[Gocator Facade API]
-        Client[REST Web Client]
-        Callback[Data Grab Callback]
+    HostApp->>Gocator: discoverDevices() / open(ipAddress)
+    Gocator->>SDK: Establish Sensor Connection
+    HostApp->>Gocator: setParameterValue() / setScanMode()
+    Gocator->>REST: REST API over HTTP
+    REST->>Sensor: Update Settings (Async)
+    HostApp->>Gocator: registerGrabCallback()
+    HostApp->>Gocator: grab()
+    loop 3D Scan Acquisition Loop
+        Sensor->>SDK: GoPxL Data Protocol
+        SDK->>Gocator: Receive Raw GoDataSet
+        Gocator->>HostApp: Execute Grab Callback(dataSet, frameSeq)
+        Note over HostApp: Process 3D Surface / Profile
     end
-
-    subgraph Hardware Sensor
-        RestSrv[Gocator Internal Web Server]
-        ScanEng[Gocator Scan Engine]
-    end
-
-    App -->|1. Setup / Connect| Facade
-    UI -->|Query Properties| Client
-    Client -->|REST API over HTTP| RestSrv
-    Facade -->|Trigger Scan| ScanEng
-    ScanEng -->|GoPxL Data Protocol| Callback
-    Callback -->|Emit Raw GoDataSet| App
+    HostApp->>Gocator: stop() & close()
 ```
 
 ---
@@ -54,10 +51,9 @@ graph LR
 
 | Requirement | Description |
 | :--- | :--- |
-| **OS Support** | Windows 10+ / Linux / macOS 12+ |
-| **C++ Standard** | C++17 이상 필수 |
-| **LMI GoPxL SDK** | `modules/Gocator/GoPxL-SDK/` 하위에 해당 타겟 OS용 GoPxL SDK 구성이 선행되어야 함 |
-| **Qt Framework** | Qt 6.x (Core, Gui, Widgets) *[선택 사항, UI 위젯 활성 시]* |
+| **OS Support** | Windows 10+ / Linux / macOS 12+ (Apple Silicon 및 x86_64 지원) |
+| **C++ Standard** | C++17 이상 필수 (C++20 권장) |
+| **LMI GoPxL SDK** | `modules/Gocator/GoPxL-SDK/` 하위에 각 타겟 OS용 GoPxL SDK (kApi, GoApi, GoPxLSdk) 포함 |
 
 ---
 
@@ -67,39 +63,61 @@ graph LR
 상위 프로젝트 CMakeLists.txt에 서브프로젝트 타겟으로 연결하여 빌드 체인에 추가합니다.
 
 ```cmake
+# Qt 위젯 미사용 Pure C++ 전용 빌드 시 (선택)
+set(GOCATOR_BUILD_QT_UI OFF CACHE BOOL "" FORCE)
+
 # Add module target
 add_subdirectory(modules/Gocator/C++)
 
-# Link to the device core target
+# Link to host target
 target_link_libraries(YourHostApp PRIVATE gocator_core)
 ```
 
-Hosts that need neutral Scene3D conversion add GraphicsEngine first, set
-`GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER=ON`, and link
-`Gocator::GraphicsEngineAdapter` explicitly. The `gocator_core` target does not
-link GraphicsEngine or VTK.
+> **Scene3D 어댑터 연동 (선택)**: 중립적 3D 시각화 레이어가 필요한 호스트 애플리케이션은 `GraphicsEngine` 타겟을 먼저 선언한 후 `GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER=ON`을 설정하고 `Gocator::GraphicsEngineAdapter`를 명시적으로 링크합니다. Core 타겟인 `gocator_core`는 `GraphicsEngine`이나 VTK에 의존하지 않습니다.
 
 ### 2. Basic Example
 ```cpp
 #include "Gocator.h"
-#include <memory>
 #include <iostream>
 
 int main()
 {
-    auto gocator = std::make_unique<Gocator>();
+    Gocator gocator;
 
-    // 3D GoDataSet 수신 콜백 등록
-    gocator->registerGrabCallback([](const GoPxLSdk::GoDataSet& dataSet, size_t frameNo) {
-        std::cout << "3D Data Frame Received: " << frameNo << std::endl;
-        
-        // GoDataSet 내 Surface / Profile 데이터 파싱 처리
+    // 1. 센서 탐색
+    auto devices = gocator.discoverDevices();
+    if (devices.empty()) {
+        std::cerr << "No Gocator sensor found." << std::endl;
+        return 1;
+    }
+
+    // 2. 3D GoDataSet 수신 콜백 등록
+    gocator.registerGrabCallback([](const GoPxLSdk::GoDataSet& dataSet, size_t frameSeq) {
+        std::cout << "Acquired 3D Frame #" << frameSeq << std::endl;
+        // GoDataSet 내부의 Surface / Profile 데이터 파싱 및 처리
     });
 
-    // 센서 연결 및 스캔 기동
-    if (gocator->connect("192.168.1.10")) {
-        gocator->grab();
+    // 3. 센서 연결 및 스캔 설정
+    std::string ip = devices[0].address;
+    if (!gocator.open(ip)) {
+        std::cerr << "Failed to open Gocator sensor: " << ip << std::endl;
+        return 1;
     }
+
+    // Surface 스캔 모드 및 노출 시간(us) 설정
+    gocator.setScanMode(Gocator::SurfaceMode);
+    gocator.setExposureUs(10000);
+
+    // 4. Grabbing 시작 (연속 수신)
+    gocator.grab();
+
+    // ... 비동기 취득 진행 ...
+
+    // 5. 해제 시
+    gocator.stop();
+    gocator.close();
+
+    return 0;
 }
 ```
 
@@ -108,25 +126,19 @@ int main()
 ## ⚠️ Development Notes
 
 > [!IMPORTANT]
-> **표면 데이터(Surface) 렌더링 활성화 팁**
-> 데이터 취득 루프가 원활히 돌고 있음에도 시각화 영역에 아무런 데이터가 노출되지 않을 경우, 물리 센서의 출력 데이터 포맷을 점검해야 합니다.
-> 1. `List Sources`를 통해 장치가 3D 표면 전송을 활성화하고 있는지 조회합니다.
-> 2. 센서 웹 콘솔 또는 REST 속성 제어로 **Surface Output** 설정을 활성화합니다.
-> 3. 전달 대상 데이터 유형이 `topIntensityImage` 또는 `topRangeImage` 등으로 정확히 선택되어 있는지 검증하십시오.
+> **표면 데이터(Surface) 렌더링 활성화**
+> 데이터 취득 루프가 원활히 동작하고 있음에도 점군 데이터가 수신되지 않을 경우 물리 센서의 데이터 출력 설정을 확인해야 합니다.
+> 1. 센서 웹 콘솔 또는 REST 파라미터 제어를 통해 **Surface Output** 설정을 활성화합니다.
+> 2. 전달 대상 데이터 포맷이 `topRangeImage` 또는 `topIntensityImage` 등으로 정확히 선택되어 있는지 검증하십시오.
 
 > [!WARNING]
-> **프레임 단위 디버그 로그 지양**
-> 실시간 3D 취득은 대역폭 소모가 극심합니다. 매 프레임마다 Grab 콜백 내에서 `std::cout` 로그를 무분별하게 유발할 경우 스레드 동기화 락으로 인한 성능 저하 및 패킷 드랍이 발생합니다. 프레임 갱신 주기는 별도 통계 스레드에서 정주기 출력하는 구조로 가져가야 합니다.
+> **프레임 단위 로그 방지**
+> 실시간 3D 데이터 취득 시 초당 전송되는 점군 페이로드가 매우 큽니다. Grab 콜백 내부에서 콘솔 출력(`std::cout`)이나 무분별한 동기식 I/O를 수행할 경우 스레드 동기화 병목 및 프레임 드롭이 발생할 수 있습니다.
 
-> [!TIP]
-> **Unified status-bar style contract**
-> When implementing or extending UI, keep the geometry of the `Idle` / `Disconnected` / `Connected` / `Live` status label aligned with the Camera module's `QCameraWidget`. The shared dynamic CSS property (`status`) should stay compatible with the Resources module style map.
->
-> `QGocatorWidget` also owns transient operation feedback in its status-bar message field:
-> - Grab requests report startup or stop progress, then `GrabbingStatus` callbacks report the effective started/stopped transition.
-> - Parameter editors report the requested label and value when an asynchronous update is submitted.
-> - A parameter update message indicates submission, not confirmed device acceptance, because the current facade setter does not return an apply result to the widget.
+> [!NOTE]
+> **호스트 로그 전달 계약 (`syslog`)**
+> `Gocator::syslog()`는 단일 `[Gocator]` 레코드를 `std::cout` 또는 `std::cerr`로 즉시 플러시하여 출력합니다. Playground의 `LogManager`와 같은 호스트 로그 수집기는 버퍼링 대기 없이 라이프사이클 및 오퍼레이션 피드백을 수집할 수 있습니다.
 
-> [!TIP]
-> **Host log forwarding contract**
-> `Gocator::syslog()` writes one complete `[Gocator]` record to `std::cout` or `std::cerr` and flushes the selected stream immediately. Host stream redirectors such as Playground's `LogManager` can therefore display lifecycle and operation feedback without waiting for buffered output.
+> [!CAUTION]
+> **자원 해제 수명주기**
+> 애플리케이션 종료 시 `Gocator` 객체가 소멸하기 전에 `gocator.stop()`, `gocator.close()`를 순차적으로 호출하여 GoPxL SDK 스캔 작업과 소켓 연결을 안전하게 해제해야 합니다.
