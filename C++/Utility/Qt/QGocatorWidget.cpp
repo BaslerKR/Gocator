@@ -572,12 +572,19 @@ void QGocatorWidget::setRunningState(bool running)
 
 QString QGocatorWidget::ipAddress() const
 {
-    QString currentData = _ipCombo->currentData().toString();
-    if (currentData.isEmpty())
+    const QString currentText = _ipCombo->currentText().trimmed();
+    const int currentIndex = _ipCombo->currentIndex();
+    if (currentIndex >= 0
+        && currentText == _ipCombo->itemText(currentIndex).trimmed())
     {
-        return _ipCombo->currentText().trimmed();
+        const QString selectedAddress = _ipCombo->itemData(currentIndex).toString().trimmed();
+        if (!selectedAddress.isEmpty())
+        {
+            return selectedAddress;
+        }
     }
-    return currentData;
+
+    return currentText;
 }
 
 double QGocatorWidget::scanLengthMm() const

@@ -10,6 +10,7 @@ set(CMAKE_MACOSX_RPATH ON)
 set(GOPXL_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../GoPxL-SDK" CACHE PATH "GoPxL SDK root")
 set(GOCATOR_DEFAULT_QT_PREFIX "/opt/Qt/6.7.2/gcc_64" CACHE PATH "Default Qt prefix")
 option(GOCATOR_BUILD_QT_UI "Build Qt Widgets debug UI when Qt is available" ON)
+option(GOCATOR_BUILD_TESTS "Build focused Gocator module tests" OFF)
 option(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER
     "Build the optional Gocator-to-GraphicsEngine adapter target."
     OFF
@@ -96,6 +97,42 @@ if(GOCATOR_BUILD_QT_UI)
         )
         target_link_libraries(gocator_core PUBLIC Qt6::Widgets Qt6::Concurrent)
         target_compile_definitions(gocator_core PUBLIC GOCATOR_HAS_UI)
+    endif()
+endif()
+
+if(GOCATOR_BUILD_TESTS)
+    if(NOT GOCATOR_BUILD_QT_UI)
+        message(FATAL_ERROR "GOCATOR_BUILD_TESTS requires GOCATOR_BUILD_QT_UI=ON.")
+    endif()
+
+    find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Test)
+    enable_testing()
+
+    add_executable(QGocatorWidgetTests
+        tests/QGocatorWidgetTests.cpp
+    )
+    set_target_properties(QGocatorWidgetTests PROPERTIES
+        AUTOMOC ON
+        WIN32_EXECUTABLE FALSE
+    )
+    target_link_libraries(QGocatorWidgetTests
+        PRIVATE
+            gocator_core
+            Qt6::Test
+    )
+
+    if(WIN32)
+        add_test(NAME QGocatorWidgetTests
+            COMMAND ${CMAKE_COMMAND} -E env
+                "PATH=${GOPXL_SDK_DIR}/lib/${GOPXL_PLATFORM_DIR};$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+                "QT_QPA_PLATFORM=offscreen"
+                $<TARGET_FILE:QGocatorWidgetTests>
+        )
+    else()
+        add_test(NAME QGocatorWidgetTests COMMAND QGocatorWidgetTests)
+        set_tests_properties(QGocatorWidgetTests PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        )
     endif()
 endif()
 
