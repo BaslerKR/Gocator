@@ -69,12 +69,13 @@ void applyCommonFrameFields(RangeFrame& frame,
 {
     frame.width = width;
     frame.height = height;
-    frame.xScaleMm = resolution.x != 0.0 ? resolution.x : 1.0;
-    frame.yScaleMm = resolution.y != 0.0 ? resolution.y : 1.0;
-    frame.zScaleMm = 1.0;
-    frame.xOffsetMm = offset.x;
-    frame.yOffsetMm = offset.y;
-    frame.zOffsetMm = 0.0;
+    frame.lengthUnit = GraphicsLengthUnit::Millimeter;
+    frame.xScale = resolution.x != 0.0 ? resolution.x : 1.0;
+    frame.yScale = resolution.y != 0.0 ? resolution.y : 1.0;
+    frame.zScale = 1.0;
+    frame.xOffset = offset.x;
+    frame.yOffset = offset.y;
+    frame.zOffset = 0.0;
     frame.sensorType = "LMI Gocator";
     frame.frameId = id;
 }
@@ -352,7 +353,7 @@ void applyCommonFrameFields(RangeFrame& frame,
 
     RangeFrame frame;
     applyCommonFrameFields(frame, *width, 1, msg.Resolution(), msg.Offset(), frameId(msg, stamp));
-    frame.yScaleMm = 1.0;
+    frame.yScale = 1.0;
     frame.zValues.resize(count);
     frame.validMask.resize(count, 1U);
 
@@ -410,7 +411,7 @@ void applyCommonFrameFields(RangeFrame& frame,
 
     RangeFrame frame;
     applyCommonFrameFields(frame, *width, 1, msg.Resolution(), msg.Offset(), frameId(msg, stamp));
-    frame.yScaleMm = 1.0;
+    frame.yScale = 1.0;
     frame.xValues.resize(count);
     frame.yValues.resize(count, 0.0F);
     frame.zValues.resize(count);
