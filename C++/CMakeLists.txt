@@ -9,7 +9,7 @@ set(CMAKE_MACOSX_RPATH ON)
 
 set(GOPXL_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../GoPxL-SDK" CACHE PATH "GoPxL SDK root")
 set(GOCATOR_DEFAULT_QT_PREFIX "/opt/Qt/6.7.2/gcc_64" CACHE PATH "Default Qt prefix")
-option(GOCATOR_BUILD_QT_UI "Build Qt Widgets debug UI when Qt is available" ON)
+option(GOCATOR_BUILD_QT_UI "Build the optional Qt Widgets integration target" OFF)
 option(GOCATOR_BUILD_TESTS "Build focused Gocator module tests" OFF)
 option(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER
     "Build the optional Gocator-to-GraphicsEngine adapter target."
@@ -88,16 +88,23 @@ target_link_libraries(gocator_core
 )
 
 if(GOCATOR_BUILD_QT_UI)
-    find_package(Qt6 QUIET COMPONENTS Widgets Concurrent)
-    if(Qt6_FOUND)
-        set_target_properties(gocator_core PROPERTIES AUTOMOC ON)
-        target_sources(gocator_core PRIVATE
-            Utility/Qt/QGocatorWidget.cpp
-            Utility/Qt/QGocatorWidget.h
-        )
-        target_link_libraries(gocator_core PUBLIC Qt6::Widgets Qt6::Concurrent)
-        target_compile_definitions(gocator_core PUBLIC GOCATOR_HAS_UI)
-    endif()
+    find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
+
+    add_library(GocatorQtWidget STATIC
+        Utility/Qt/QGocatorWidget.cpp
+        Utility/Qt/QGocatorWidget.h
+    )
+    add_library(Gocator::QtWidget ALIAS GocatorQtWidget)
+    set_target_properties(GocatorQtWidget PROPERTIES AUTOMOC ON)
+    target_compile_features(GocatorQtWidget PUBLIC cxx_std_17)
+    target_compile_definitions(GocatorQtWidget PUBLIC GOCATOR_HAS_UI)
+    target_link_libraries(GocatorQtWidget
+        PUBLIC
+            gocator_core
+            Qt6::Widgets
+            Qt6::Concurrent
+    )
+    message(STATUS "[Gocator] Gocator::QtWidget enabled.")
 endif()
 
 if(GOCATOR_BUILD_TESTS)
@@ -105,7 +112,7 @@ if(GOCATOR_BUILD_TESTS)
         message(FATAL_ERROR "GOCATOR_BUILD_TESTS requires GOCATOR_BUILD_QT_UI=ON.")
     endif()
 
-    find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Test)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
     enable_testing()
 
     add_executable(QGocatorWidgetTests
@@ -117,7 +124,7 @@ if(GOCATOR_BUILD_TESTS)
     )
     target_link_libraries(QGocatorWidgetTests
         PRIVATE
-            gocator_core
+            Gocator::QtWidget
             Qt6::Test
     )
 
@@ -148,12 +155,14 @@ foreach(target ${gocator_runtime_targets})
 endforeach()
 
 if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
-    if(NOT TARGET GraphicsEngine::GraphicsEngine)
+    if(NOT TARGET GraphicsEngine::Contracts)
         message(FATAL_ERROR
             "[Gocator] GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER=ON requires "
-            "GraphicsEngine::GraphicsEngine. Add GraphicsEngine first or disable the adapter."
+            "GraphicsEngine::Contracts. Add GraphicsEngine first or disable the adapter."
         )
     endif()
+
+    find_package(OpenMP REQUIRED COMPONENTS CXX)
 
     add_library(GocatorGraphicsEngineAdapter STATIC
         Utility/GraphicsEngine/GocatorDataSetScene3DAdapter.h
@@ -168,7 +177,9 @@ if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
     target_link_libraries(GocatorGraphicsEngineAdapter
         PUBLIC
             gocator_core
-            GraphicsEngine::GraphicsEngine
+            GraphicsEngine::Contracts
+        PRIVATE
+            OpenMP::OpenMP_CXX
     )
     message(STATUS "[Gocator] Gocator::GraphicsEngineAdapter enabled.")
 endif()

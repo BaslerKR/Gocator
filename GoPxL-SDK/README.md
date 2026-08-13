@@ -1,112 +1,36 @@
-# GoPxL SDK - macOS (arm64)
+# GoPxL SDK Layout
 
-SDK for controlling Gocator sensors on macOS.
+This directory contains the GoPxL headers and platform-specific libraries consumed by the Gocator CMake target. The SDK content remains governed by its vendor license and compatibility matrix.
 
-## Directory Structure
+## Layout
 
-```
+```text
 GoPxL-SDK/
-├── bin/            # Built executables
-├── lib/            # Shared libraries (.dylib)
-├── include/        # Header files
-│   ├── kApi/       # Platform abstraction layer
-│   ├── GoApi/      # Gocator API
-│   └── GoPxLSdk/  # GoPxL SDK (connect, configure, receive data)
-└── samples/        # Sample source code
+|-- include/
+|   |-- kApi/
+|   |-- GoApi/
+|   `-- GoPxLSdk/
+`-- lib/
+    |-- apple_silicon/
+    |-- linux_arm64/
+    |-- linux_arm64d/
+    |-- linux_x64/
+    |-- linux_x64d/
+    |-- win64/
+    `-- win64d/
 ```
 
-## Quick Start
+The bundled set supports Apple Silicon, Linux arm64/x64, and Windows x64 in the configurations represented above. It does not contain macOS x86_64 or Linux armv7 libraries. Do not infer support for an absent directory from a CMake architecture branch.
 
-```bash
-cd samples/SimpleConnect
-make
-../../bin/SimpleConnect 192.168.1.10
-```
+## CMake Selection
 
-## Linking in Your Project
-
-### Compiler flags
-
-```
--I<SDK_PATH>/include/kApi
--I<SDK_PATH>/include/GoApi
--I<SDK_PATH>/include/GoPxLSdk
-```
-
-### Linker flags
-
-```
--L<SDK_PATH>/lib -lkApi -lGoApi -lGoPxLSdk
--Wl,-rpath,<path_to_lib_at_runtime>
-```
-
-### CMake example
+`GOPXL_SDK_DIR` identifies this root. `GOPXL_PLATFORM_DIR` identifies a directory below `lib/` and may be supplied explicitly:
 
 ```cmake
-set(GOPXL_SDK_DIR "/path/to/GoPxL-SDK")
-
-add_executable(myapp main.cpp)
-
-target_include_directories(myapp PRIVATE
-    ${GOPXL_SDK_DIR}/include/kApi
-    ${GOPXL_SDK_DIR}/include/GoApi
-    ${GOPXL_SDK_DIR}/include/GoPxLSdk
-)
-
-target_link_directories(myapp PRIVATE ${GOPXL_SDK_DIR}/lib)
-target_link_libraries(myapp kApi GoApi GoPxLSdk)
-
-set_target_properties(myapp PROPERTIES
-    BUILD_RPATH "${GOPXL_SDK_DIR}/lib"
-    INSTALL_RPATH "@executable_path/../lib"
-)
+set(GOPXL_SDK_DIR "/path/to/GoPxL-SDK" CACHE PATH "")
+set(GOPXL_PLATFORM_DIR "linux_x64" CACHE STRING "")
 ```
 
-## Key Constants
+The selected libraries must match the active build configuration. Configure-time `CMAKE_BUILD_TYPE` is not sufficient to select Debug and Release libraries under a multi-config generator; consumers must not accept a Debug validation until the generated target resolves the matching directory per configuration.
 
-| Constant | Value | Description |
-|----------|-------|-------------|
-| Control Port | 3600 | TCP port for REST commands |
-| GDP Port | 3601 | TCP port for data streaming |
-| Web Port | 8100 | HTTP web UI (not used by SDK) |
-
-## Minimal Code Example
-
-```cpp
-#include <kApi/kApiDef.h>
-#include <GoApi/GoApiLib.h>
-#include <GoPxLSdk/GoSystem.h>
-#include <GoPxLSdk/GoGdpClient.h>
-#include <GoPxLSdk/GoGdpMsg/GoGdpProfileUniform.h>
-
-using namespace GoPxLSdk;
-
-int main() {
-    kAssembly goApiLib = kNULL;
-    GoApiLib_Construct(&goApiLib);
-
-    kIpAddress addr;
-    kIpAddress_Parse(&addr, "192.168.1.10");
-
-    auto system = GoSystem(addr, GO_PXL_SDK_DEFAULT_CONTROL_PORT);
-    system.Connect();
-    system.Start();
-
-    auto gdp = std::make_unique<GoGdpClient>();
-    gdp->Connect(system.Address(), system.GdpPort());
-    gdp->ReceiveDataSync(20000);
-
-    // Process gdp->DataSet() ...
-
-    gdp->Close();
-    system.Stop();
-    system.Disconnect();
-    kDestroyRef(&goApiLib);
-}
-```
-
-## Platform
-
-- macOS arm64 (Apple Silicon)
-- Requires: C++17
-- Built with: Apple clang
+Runtime libraries from the same SDK directory must be available to the loader. Header and link success alone do not prove runtime or sensor-firmware compatibility.
