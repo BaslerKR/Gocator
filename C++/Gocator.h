@@ -65,8 +65,29 @@ public:
     void setIntensityEnabled(bool enable);
     void setUniformSpacingEnabled(bool enable);
 
+    /**
+     * Reads the JSON schema exposed by a scanner or sensor resource.
+     *
+     * @param target Resource family to inspect.
+     * @return JSON schema, or an empty object when the resource is unavailable.
+     */
     std::string getParametersSchema(ParameterTarget target) const;
+
+    /**
+     * Reads current values exposed by a scanner or sensor resource.
+     *
+     * @param target Resource family to inspect.
+     * @return Resource data as JSON, or an empty object when unavailable.
+     */
     std::string getParametersData(ParameterTarget target) const;
+
+    /**
+     * Applies one JSON value to a scanner or sensor resource path.
+     *
+     * @param target Resource family receiving the patch.
+     * @param path JSON pointer relative to that resource.
+     * @param jsonValue Serialized JSON value.
+     */
     void setParameterValue(ParameterTarget target, const std::string& path, const std::string& jsonValue);
 
     std::string getParametersSchema(const std::string& type) const;

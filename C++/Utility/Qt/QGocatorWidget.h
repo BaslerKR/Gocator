@@ -71,12 +71,31 @@ private:
 
     void setConnectionOperationActive(bool active);
     void applyConnectionState(bool opened);
+
+    /** Rebuilds scanner and sensor feature editors from live resource schemas. */
     void populateFeatures();
     void clearFeatures();
     void applyDiscoveredDevices(const std::vector<Gocator::DeviceInfo>& devices);
+
+    /**
+     * Adds one schema property and its editor to the feature tree.
+     *
+     * @param parentItem Parent tree item receiving the property.
+     * @param target REST resource family receiving edits.
+     * @param basePath JSON pointer prefix for the property.
+     * @param name Resource property name.
+     * @param propSchema Property schema.
+     * @param valuesObj Current values at the property's parent object.
+     */
     void addFeatureNode(class QTreeWidgetItem* parentItem, Gocator::ParameterTarget target, const QString& basePath, const QString& name, const class QJsonObject& propSchema, const class QJsonObject& valuesObj);
+
+    /** Refreshes current scanner and sensor values asynchronously. */
     void updateFeatureValues();
+
+    /** Applies asynchronously fetched values to existing feature editors. */
     void applyFeatureValues(const FeatureDataResult& result);
+
+    /** Enables editable feature controls while preserving schema read-only fields. */
     void setFeatureEditorsEnabled(bool enabled);
 
     Gocator *_gocator = nullptr;

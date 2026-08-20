@@ -26,7 +26,9 @@
 #include <QSignalBlocker>
 #include <QDebug>
 #include <QtConcurrent>
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 
 namespace
 {
@@ -77,6 +79,79 @@ void repolish(QWidget* widget)
     widget->style()->unpolish(widget);
     widget->style()->polish(widget);
     widget->update();
+}
+
+/**
+ * Returns the number of decimal places needed to represent a finite value.
+ *
+ * @param value Numeric value from a GoPxL schema or resource.
+ * @return Decimal places, capped at the precision supported by the editor.
+ */
+int decimalPlaces(double value)
+{
+    if (!std::isfinite(value)) return 0;
+
+    QString text = QString::number(std::abs(value), 'f', 12);
+    while (text.endsWith(QLatin1Char('0'))) text.chop(1);
+
+    const int decimalPoint = text.indexOf(QLatin1Char('.'));
+    if (decimalPoint < 0) return 0;
+    return std::min(12, static_cast<int>(text.size() - decimalPoint - 1));
+}
+
+/**
+ * Derives a floating-point editor precision from standard and GoPxL schema hints.
+ *
+ * @param propSchema Property schema containing bounds or increment metadata.
+ * @param currentValue Current resource value.
+ * @return Decimal places required to avoid rounding the resource value.
+ */
+int schemaDecimalPlaces(const QJsonObject& propSchema, double currentValue)
+{
+    int decimals = decimalPlaces(currentValue);
+    for (const QString& key : {QStringLiteral("minimum"),
+                               QStringLiteral("maximum"),
+                               QStringLiteral("multipleOf"),
+                               QStringLiteral("step"),
+                               QStringLiteral("increment")})
+    {
+        if (propSchema.contains(key))
+        {
+            decimals = std::max(decimals, decimalPlaces(propSchema.value(key).toDouble()));
+        }
+    }
+
+    for (const QString& key : {QStringLiteral("decimals"),
+                               QStringLiteral("decimalPlaces"),
+                               QStringLiteral("precision")})
+    {
+        if (propSchema.contains(key))
+        {
+            decimals = std::max(decimals, propSchema.value(key).toInt());
+        }
+    }
+
+    return std::clamp(decimals, 0, 12);
+}
+
+/**
+ * Selects the increment advertised by a schema, falling back to its precision.
+ *
+ * @param propSchema Property schema containing increment metadata.
+ * @param decimals Editor precision derived from the schema.
+ * @return Positive editor increment.
+ */
+double schemaStep(const QJsonObject& propSchema, int decimals)
+{
+    for (const QString& key : {QStringLiteral("multipleOf"),
+                               QStringLiteral("step"),
+                               QStringLiteral("increment")})
+    {
+        const double step = propSchema.value(key).toDouble();
+        if (std::isfinite(step) && step > 0.0) return step;
+    }
+
+    return decimals > 0 ? std::pow(10.0, -decimals) : 1.0;
 }
 }
 
@@ -764,37 +839,46 @@ void QGocatorWidget::populateFeatures()
 
     QTreeWidgetItem* rootItem = new QTreeWidgetItem(_featuresWidget, QStringList() << rootText);
 
-    // scanner 리소스 전개
-    {
-        QTreeWidgetItem* scannerCategory = new QTreeWidgetItem(rootItem, QStringList() << QStringLiteral("Scanner"));
+    const auto addResourceCategory = [this, rootItem](const QString& label,
+                                                       Gocator::ParameterTarget target,
+                                                       const QJsonObject& resourceSchema,
+                                                       const QJsonObject& resourceData) {
+        const QJsonObject resourceProperties = resourceSchema.value(QStringLiteral("properties")).toObject();
+        if (resourceProperties.isEmpty()) return;
 
-        QJsonObject parametersSchema = scannerSchema.value(QStringLiteral("properties")).toObject()
-                                                   .value(QStringLiteral("parameters")).toObject();
-        QJsonObject parametersValues = scannerData.value(QStringLiteral("parameters")).toObject();
-
-        QJsonObject subProps = parametersSchema.value(QStringLiteral("properties")).toObject();
-        for (auto it = subProps.begin(); it != subProps.end(); ++it)
+        QTreeWidgetItem* category = new QTreeWidgetItem(rootItem, QStringList() << label);
+        const QJsonObject parameterSchema = resourceProperties.value(QStringLiteral("parameters")).toObject();
+        if (!parameterSchema.isEmpty())
         {
-            addFeatureNode(scannerCategory, Gocator::ParameterTarget::Scanner, QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
+            const QJsonObject parameterValues = resourceData.value(QStringLiteral("parameters")).toObject();
+            const QJsonObject parameterProperties = parameterSchema.value(QStringLiteral("properties")).toObject();
+            for (auto it = parameterProperties.begin(); it != parameterProperties.end(); ++it)
+            {
+                addFeatureNode(category, target, QStringLiteral("/parameters"), it.key(), it.value().toObject(), parameterValues);
+            }
+
+            // Some GoPxL versions expose motion/alignment beside the
+            // /parameters envelope on the scanner resource.
+            for (auto it = resourceProperties.begin(); it != resourceProperties.end(); ++it)
+            {
+                if (it.key() == QStringLiteral("parameters")) continue;
+                addFeatureNode(category, target, QString(), it.key(), it.value().toObject(), resourceData);
+            }
         }
-        scannerCategory->setExpanded(false);
-    }
-
-    // sensor 리소스 전개
-    {
-        QTreeWidgetItem* sensorCategory = new QTreeWidgetItem(rootItem, QStringList() << QStringLiteral("Sensor"));
-
-        QJsonObject parametersSchema = sensorSchema.value(QStringLiteral("properties")).toObject()
-                                                   .value(QStringLiteral("parameters")).toObject();
-        QJsonObject parametersValues = sensorData.value(QStringLiteral("parameters")).toObject();
-
-        QJsonObject subProps = parametersSchema.value(QStringLiteral("properties")).toObject();
-        for (auto it = subProps.begin(); it != subProps.end(); ++it)
+        else
         {
-            addFeatureNode(sensorCategory, Gocator::ParameterTarget::Sensor, QStringLiteral("/parameters"), it.key(), it.value().toObject(), parametersValues);
+            // Firmware variants without a parameters envelope expose their
+            // writable values at the resource root.
+            for (auto it = resourceProperties.begin(); it != resourceProperties.end(); ++it)
+            {
+                addFeatureNode(category, target, QString(), it.key(), it.value().toObject(), resourceData);
+            }
         }
-        sensorCategory->setExpanded(false);
-    }
+        category->setExpanded(false);
+    };
+
+    addResourceCategory(QStringLiteral("Scanner"), Gocator::ParameterTarget::Scanner, scannerSchema, scannerData);
+    addResourceCategory(QStringLiteral("Sensor"), Gocator::ParameterTarget::Sensor, sensorSchema, sensorData);
 
     rootItem->setExpanded(true);
     _updatingFeatures = false;
@@ -904,9 +988,12 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
                 else // number
                 {
                     QDoubleSpinBox* spin = new QDoubleSpinBox(_featuresWidget);
+                    const double currentValue = curVal.toDouble(0.0);
+                    const int decimals = schemaDecimalPlaces(propSchema, currentValue);
+                    spin->setDecimals(decimals);
                     spin->setRange(minVal, maxVal);
-                    spin->setValue(curVal.toDouble(0.0));
-                    spin->setSingleStep(0.1);
+                    spin->setValue(currentValue);
+                    spin->setSingleStep(schemaStep(propSchema, decimals));
                     connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &QGocatorWidget::onParameterChanged);
                     editorWidget = spin;
                 }
@@ -936,6 +1023,9 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
         if (editorWidget)
         {
             editorWidget->setObjectName(QStringLiteral("gocatorFeature_") + name);
+            const bool readOnly = propSchema.value(QStringLiteral("readOnly")).toBool(false);
+            editorWidget->setProperty("gocatorReadOnly", readOnly);
+            editorWidget->setEnabled(!readOnly);
             _featuresWidget->setItemWidget(item, 1, editorWidget);
             _widgetToFeatureMap.insert(editorWidget, FeatureMapping{target, path, displayName});
         }
@@ -987,7 +1077,7 @@ void QGocatorWidget::onParameterChanged()
         }
         else if (jsonVal.isDouble())
         {
-            jsonValueStr = QString::number(jsonVal.toDouble());
+            jsonValueStr = QString::number(jsonVal.toDouble(), 'g', 17);
         }
         else if (jsonVal.isString())
         {
@@ -1058,8 +1148,13 @@ void QGocatorWidget::applyFeatureValues(const FeatureDataResult& result)
         if (!widget) continue;
 
         QString relativePath = mapping.path;
+        QJsonObject currentObj;
+        currentObj = mapping.target == Gocator::ParameterTarget::Scanner ? scannerData : sensorData;
+
         if (relativePath.startsWith(QStringLiteral("/parameters")))
         {
+            if (mapping.target == Gocator::ParameterTarget::Scanner) currentObj = scannerParams;
+            else currentObj = sensorParams;
             relativePath = relativePath.mid(11);
         }
         if (relativePath.startsWith(QStringLiteral("/")))
@@ -1068,7 +1163,6 @@ void QGocatorWidget::applyFeatureValues(const FeatureDataResult& result)
         }
 
         QStringList segments = relativePath.split(QStringLiteral("/"));
-        QJsonObject currentObj = (mapping.target == Gocator::ParameterTarget::Scanner) ? scannerParams : sensorParams;
         QJsonValue targetVal;
 
         for (int i = 0; i < segments.size(); ++i)
@@ -1129,7 +1223,8 @@ void QGocatorWidget::setFeatureEditorsEnabled(bool enabled)
     {
         if (it.key())
         {
-            it.key()->setEnabled(enabled);
+            const bool readOnly = it.key()->property("gocatorReadOnly").toBool();
+            it.key()->setEnabled(enabled && !readOnly);
         }
     }
 }

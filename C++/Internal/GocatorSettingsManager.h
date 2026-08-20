@@ -83,7 +83,18 @@ public:
     std::vector<std::string> listTools();
     GoPxLSdk::GoJson readToolParameters(const std::string& toolId);
 
+    /**
+     * Reads scanner, sensor, tool, and scanner-root system configuration.
+     *
+     * @return Snapshot suitable for a later applyConfig call.
+     */
     GocatorParameterSet readAllConfig();
+
+    /**
+     * Applies a configuration snapshot to the connected resources.
+     *
+     * @param config Snapshot previously produced by readAllConfig or a compatible caller.
+     */
     void applyConfig(const GocatorParameterSet& config);
 
 private:

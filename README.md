@@ -7,7 +7,8 @@ Gocator is a C++17 acquisition and configuration facade for LMI Gocator sensors 
 - Discover sensors and open a connection by IP address.
 - Receive `GoDataSet` profile or surface payloads through registered callbacks.
 - Configure scan length, scan mode, exposure, intensity, and uniform spacing.
-- Read parameter schemas and values or write individual parameters through the sensor REST resources.
+- Read parameter schemas and values or write individual scanner and sensor parameters through the REST resources; scanner resources include firmware-exposed motion and alignment settings.
+- Preserve schema-provided numeric precision and increments in the optional Qt feature editor, including sub-unit spacing values.
 - Build an optional Qt 6 feature widget without adding Qt to the core target.
 
 ## Requirements

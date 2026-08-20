@@ -333,6 +333,26 @@ GocatorParameterSet GocatorSettingsManager::readAllConfig()
     config.addParameter("scanner", readParameters(scanner.scannerPath));
     config.addParameter("sensor", readParameters(scanner.sensorPath));
 
+    // Preserve scanner-level settings that are defined beside /parameters,
+    // including firmware-provided motion and alignment fields. Select them
+    // from the resource schema so response metadata is never copied back.
+    const auto readScannerRootSettings = [this](const std::string& path) {
+        const GoPxLSdk::GoJson data = read(path);
+        const GoPxLSdk::GoJson resourceSchema = schema(path);
+        GoPxLSdk::GoJson rootSettings("{}");
+        if (!resourceSchema.HasKey("properties")) return rootSettings;
+
+        const GoPxLSdk::GoJson properties = resourceSchema.At("/properties");
+        for (auto it = properties.Begin(); it != properties.End(); it++)
+        {
+            if (it.Key() == "parameters" || !data.HasKey(it.Key())) continue;
+            rootSettings.Set("/" + it.Key(), data.At("/" + it.Key()));
+        }
+        return rootSettings;
+    };
+
+    config.addParameter("scannerRoot", readScannerRootSettings(scanner.scannerPath));
+
     GoPxLSdk::GoJson tools;
     std::vector<std::string> toolIds = listTools();
     for (const std::string& id : toolIds)
@@ -351,6 +371,15 @@ void GocatorSettingsManager::applyConfig(const GocatorParameterSet& config)
     if (config.hasParameter("scanner"))
     {
         updateParameters(scanner.scannerPath, config.getParameter("scanner"));
+    }
+
+    if (config.hasParameter("scannerRoot"))
+    {
+        const GoPxLSdk::GoJson scannerRoot = config.getParameter("scannerRoot");
+        if (scannerRoot.Size() > 0U)
+        {
+            update(scanner.scannerPath, scannerRoot);
+        }
     }
 
     if (config.hasParameter("sensor"))
