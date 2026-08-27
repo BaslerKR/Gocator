@@ -76,6 +76,20 @@ void applyCommonFrameFields(RangeFrame& frame,
     frame.xOffset = offset.x;
     frame.yOffset = offset.y;
     frame.zOffset = 0.0;
+    frame.rangeField = {
+        "gocator.range",
+        "Range",
+        "mm",
+        MeasurementValueDomain::Calibrated,
+        MeasurementSampleKind::GridSample,
+        16U};
+    frame.intensityField = {
+        "gocator.intensity",
+        "Intensity",
+        "",
+        MeasurementValueDomain::Native,
+        MeasurementSampleKind::GridSample,
+        0U};
     frame.sensorType = "LMI Gocator";
     frame.frameId = id;
 }
@@ -260,6 +274,7 @@ void applyCommonFrameFields(RangeFrame& frame,
     if (request.includeRangeAuxiliaryChannels)
     {
         frame.intensityBits = copyArray2Intensity(msg.Intensities(), *width, *height, frame.intensity);
+        frame.intensityField.bitsPerSample = frame.intensityBits;
     }
 
     return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
@@ -328,6 +343,7 @@ void applyCommonFrameFields(RangeFrame& frame,
     if (request.includeRangeAuxiliaryChannels)
     {
         frame.intensityBits = copyArray2Intensity(msg.Intensities(), *width, *height, frame.intensity);
+        frame.intensityField.bitsPerSample = frame.intensityBits;
     }
 
     return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
@@ -386,6 +402,7 @@ void applyCommonFrameFields(RangeFrame& frame,
     if (request.includeRangeAuxiliaryChannels)
     {
         frame.intensityBits = copyArray1Intensity(msg.Intensities(), count, frame.intensity);
+        frame.intensityField.bitsPerSample = frame.intensityBits;
     }
 
     return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
@@ -448,6 +465,7 @@ void applyCommonFrameFields(RangeFrame& frame,
     if (request.includeRangeAuxiliaryChannels)
     {
         frame.intensityBits = copyArray1Intensity(msg.Intensities(), count, frame.intensity);
+        frame.intensityField.bitsPerSample = frame.intensityBits;
     }
 
     return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
