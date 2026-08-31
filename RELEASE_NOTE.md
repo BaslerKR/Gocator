@@ -1,5 +1,6 @@
 ## Unreleased
 
+- Make the module the single owner of GoPxL platform selection, resolve Debug libraries per configuration under multi-config generators, reject unsupported bundled architectures, and preserve explicit SDK directory overrides.
 - Split the opt-in `Gocator::QtWidget` static target from `gocator_core`; Qt integration is now disabled by default and fails configuration explicitly when requested without Qt 6.
 
 - Preserve Range and Intensity semantic field metadata, including the source bit depth for intensity payloads, in converted range frames.

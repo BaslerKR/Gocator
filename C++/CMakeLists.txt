@@ -43,41 +43,100 @@ target_include_directories(gocator_core
         "${GOPXL_SDK_DIR}/include/GoPxLSdk"
 )
 
-if(NOT DEFINED GOPXL_PLATFORM_DIR)
+if(DEFINED GOPXL_PLATFORM_DIR AND NOT GOPXL_PLATFORM_DIR STREQUAL "")
+    set(gopxl_platform_debug_dir "${GOPXL_PLATFORM_DIR}")
+    set(gopxl_platform_release_dir "${GOPXL_PLATFORM_DIR}")
+else()
+    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" gopxl_system_processor)
     if(APPLE)
-        set(GOPXL_PLATFORM_DIR "apple_silicon")
+        set(gopxl_apple_architectures "${CMAKE_OSX_ARCHITECTURES}")
+        if(NOT gopxl_apple_architectures)
+            set(gopxl_apple_architectures "${gopxl_system_processor}")
+        endif()
+        foreach(gopxl_apple_architecture IN LISTS gopxl_apple_architectures)
+            string(TOLOWER "${gopxl_apple_architecture}" gopxl_apple_architecture)
+            if(NOT gopxl_apple_architecture MATCHES "^(arm64|aarch64)$")
+                message(FATAL_ERROR
+                    "[Gocator] The bundled GoPxL macOS libraries support Apple Silicon only; "
+                    "set GOPXL_SDK_DIR and GOPXL_PLATFORM_DIR explicitly for another architecture."
+                )
+            endif()
+        endforeach()
+        set(gopxl_platform_debug_dir "apple_silicon")
+        set(gopxl_platform_release_dir "apple_silicon")
     elseif(WIN32)
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            set(GOPXL_PLATFORM_DIR "win64d")
-        else()
-            set(GOPXL_PLATFORM_DIR "win64")
+        set(gopxl_windows_architecture "${CMAKE_GENERATOR_PLATFORM}")
+        if(NOT gopxl_windows_architecture)
+            set(gopxl_windows_architecture "${gopxl_system_processor}")
         endif()
-    elseif(UNIX AND NOT APPLE)
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
-            if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-                set(GOPXL_PLATFORM_DIR "linux_arm64d")
-            else()
-                set(GOPXL_PLATFORM_DIR "linux_arm64")
-            endif()
-        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
-            if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-                set(GOPXL_PLATFORM_DIR "linux_arm7d")
-            else()
-                set(GOPXL_PLATFORM_DIR "linux_arm7")
-            endif()
-        else()
-            if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-                set(GOPXL_PLATFORM_DIR "linux_x64d")
-            else()
-                set(GOPXL_PLATFORM_DIR "linux_x64")
-            endif()
+        string(TOLOWER "${gopxl_windows_architecture}" gopxl_windows_architecture)
+        if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8
+           OR NOT gopxl_windows_architecture MATCHES "^(amd64|x64|x86_64)$")
+            message(FATAL_ERROR
+                "[Gocator] The bundled GoPxL Windows libraries support x64 only; "
+                "set GOPXL_SDK_DIR and GOPXL_PLATFORM_DIR explicitly for another architecture."
+            )
         endif()
+        set(gopxl_platform_debug_dir "win64d")
+        set(gopxl_platform_release_dir "win64")
+    elseif(UNIX)
+        if(gopxl_system_processor MATCHES "^(aarch64|arm64)$")
+            set(gopxl_platform_debug_dir "linux_arm64d")
+            set(gopxl_platform_release_dir "linux_arm64")
+        elseif(gopxl_system_processor MATCHES "^(amd64|x64|x86_64)$"
+               AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+            set(gopxl_platform_debug_dir "linux_x64d")
+            set(gopxl_platform_release_dir "linux_x64")
+        else()
+            message(FATAL_ERROR
+                "[Gocator] The bundled GoPxL Linux libraries support arm64 and x64 only; "
+                "set GOPXL_SDK_DIR and GOPXL_PLATFORM_DIR explicitly for another architecture."
+            )
+        endif()
+    else()
+        message(FATAL_ERROR
+            "[Gocator] Automatic GoPxL platform selection does not support this operating system; "
+            "set GOPXL_SDK_DIR and GOPXL_PLATFORM_DIR explicitly."
+        )
     endif()
 endif()
 
+if(CMAKE_CONFIGURATION_TYPES
+   AND NOT gopxl_platform_debug_dir STREQUAL gopxl_platform_release_dir)
+    set(gopxl_platform_dir
+        "$<IF:$<CONFIG:Debug>,${gopxl_platform_debug_dir},${gopxl_platform_release_dir}>"
+    )
+else()
+    string(TOLOWER "${CMAKE_BUILD_TYPE}" gopxl_build_type)
+    if(gopxl_build_type STREQUAL "debug")
+        set(gopxl_platform_dir "${gopxl_platform_debug_dir}")
+    else()
+        set(gopxl_platform_dir "${gopxl_platform_release_dir}")
+    endif()
+endif()
+
+foreach(gopxl_required_platform_dir
+        IN ITEMS "${gopxl_platform_debug_dir}" "${gopxl_platform_release_dir}")
+    if(NOT IS_DIRECTORY "${GOPXL_SDK_DIR}/lib/${gopxl_required_platform_dir}")
+        message(FATAL_ERROR
+            "[Gocator] GoPxL library directory does not exist: "
+            "${GOPXL_SDK_DIR}/lib/${gopxl_required_platform_dir}"
+        )
+    endif()
+endforeach()
+
+set_property(TARGET gocator_core PROPERTY
+    GOCATOR_GOPXL_PLATFORM_DIR "${gopxl_platform_dir}")
+set_property(TARGET gocator_core PROPERTY
+    GOCATOR_GOPXL_PLATFORM_DIR_DEBUG "${gopxl_platform_debug_dir}")
+set_property(TARGET gocator_core PROPERTY
+    GOCATOR_GOPXL_PLATFORM_DIR_RELEASE "${gopxl_platform_release_dir}")
+set_property(TARGET gocator_core PROPERTY
+    GOCATOR_GOPXL_SDK_DIR "${GOPXL_SDK_DIR}")
+
 target_link_directories(gocator_core
     PUBLIC
-        "${GOPXL_SDK_DIR}/lib/${GOPXL_PLATFORM_DIR}"
+        "${GOPXL_SDK_DIR}/lib/${gopxl_platform_dir}"
 )
 
 target_link_libraries(gocator_core
@@ -131,7 +190,7 @@ if(GOCATOR_BUILD_TESTS)
     if(WIN32)
         add_test(NAME QGocatorWidgetTests
             COMMAND ${CMAKE_COMMAND} -E env
-                "PATH=${GOPXL_SDK_DIR}/lib/${GOPXL_PLATFORM_DIR};$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+                "PATH=${GOPXL_SDK_DIR}/lib/${gopxl_platform_dir};$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
                 "QT_QPA_PLATFORM=offscreen"
                 $<TARGET_FILE:QGocatorWidgetTests>
         )
@@ -149,8 +208,8 @@ set(gocator_runtime_targets
 
 foreach(target ${gocator_runtime_targets})
     set_target_properties(${target} PROPERTIES
-        BUILD_RPATH "${GOPXL_SDK_DIR}/lib/${GOPXL_PLATFORM_DIR}"
-        INSTALL_RPATH "@executable_path/../GoPxL-SDK/lib/${GOPXL_PLATFORM_DIR}"
+        BUILD_RPATH "${GOPXL_SDK_DIR}/lib/${gopxl_platform_dir}"
+        INSTALL_RPATH "@executable_path/../GoPxL-SDK/lib/${gopxl_platform_dir}"
     )
 endforeach()
 

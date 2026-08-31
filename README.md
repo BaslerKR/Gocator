@@ -17,7 +17,9 @@ Gocator is a C++17 acquisition and configuration facade for LMI Gocator sensors 
 - A GoPxL SDK whose headers and libraries match the target operating system, architecture, compiler, and build configuration.
 - Qt 6 Widgets and Concurrent only when `GOCATOR_BUILD_QT_UI=ON`.
 
-The repository-local SDK layout is documented in [GoPxL-SDK/README.md](GoPxL-SDK/README.md). Set `GOPXL_SDK_DIR` to another compatible SDK root when necessary. `GOPXL_PLATFORM_DIR` can override the selected library directory.
+The repository-local SDK layout is documented in [GoPxL-SDK/README.md](GoPxL-SDK/README.md). Set `GOPXL_SDK_DIR` to another compatible SDK root when necessary. Automatic selection supports only the architectures represented by the bundled directories and resolves Debug separately under multi-config generators. `GOPXL_PLATFORM_DIR` overrides the automatic directory for every configuration; the caller is then responsible for supplying a configuration-compatible SDK directory.
+
+Consumers that stage SDK runtimes can read `GOCATOR_GOPXL_SDK_DIR`, `GOCATOR_GOPXL_PLATFORM_DIR`, `GOCATOR_GOPXL_PLATFORM_DIR_DEBUG`, and `GOCATOR_GOPXL_PLATFORM_DIR_RELEASE` from the `gocator_core` target. These properties are the module-owned selection result; consumers must not duplicate the platform map.
 
 ## Integration
 
