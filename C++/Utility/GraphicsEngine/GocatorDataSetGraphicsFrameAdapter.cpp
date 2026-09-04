@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <optional>
 #include <string>
@@ -306,6 +307,7 @@ void applyCommonFrameFields(RangeFrame& frame,
     frame.xValues.resize(*count);
     frame.yValues.resize(*count);
     frame.zValues.resize(*count);
+    frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
     frame.validMask.resize(*count, 1U);
 
     const kPoint3d64f resolution = msg.Resolution();
@@ -430,6 +432,7 @@ void applyCommonFrameFields(RangeFrame& frame,
     frame.xValues.resize(count);
     frame.yValues.resize(count, 0.0F);
     frame.zValues.resize(count);
+    frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
     frame.validMask.resize(count, 1U);
 
     const kPoint3d64f resolution = msg.Resolution();
@@ -514,4 +517,60 @@ std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphics
     }
 
     return std::nullopt;
+}
+
+namespace {
+
+[[nodiscard]] GraphicsFrameRequest gocatorGraphicsFrameRequest() noexcept
+{
+    GraphicsFrameRequest request;
+    request.components = GraphicsFrameComponent::Range
+        | GraphicsFrameComponent::PointCloud
+        | GraphicsFrameComponent::Image;
+    request.includeRangeAuxiliaryChannels = true;
+    request.includePointCloudColors = true;
+    return request;
+}
+
+} // namespace
+
+GocatorGraphicsFrameStream::GocatorGraphicsFrameStream(
+    Gocator* gocator,
+    GraphicsFrameCallback callback)
+    : _gocator(gocator), _callback(std::move(callback))
+{
+    if (!_gocator || !_callback)
+    {
+        return;
+    }
+
+    _grabCallbackId = _gocator->registerGrabCallback(
+        [this](const GoPxLSdk::GoDataSet& dataSet, const std::size_t sequence) {
+            try
+            {
+                auto frame = _adapter.convertFrame(dataSet, gocatorGraphicsFrameRequest());
+                if (frame.has_value())
+                {
+                    frame->metadata.frameIndex = sequence;
+                    _callback(std::move(*frame), 0U);
+                }
+            }
+            catch (const std::exception& error)
+            {
+                Gocator::syslog(
+                    std::string("Gocator GraphicsFrame callback failed: ") + error.what(), true);
+            }
+            catch (...)
+            {
+                Gocator::syslog("Gocator GraphicsFrame callback failed with an unknown exception.", true);
+            }
+        });
+}
+
+GocatorGraphicsFrameStream::~GocatorGraphicsFrameStream()
+{
+    if (_gocator && _grabCallbackId != 0U)
+    {
+        _gocator->deregisterGrabCallback(_grabCallbackId);
+    }
 }

@@ -222,8 +222,6 @@ if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
     endif()
 
     find_package(OpenMP REQUIRED COMPONENTS CXX)
-    find_package(Qt6 REQUIRED COMPONENTS Gui)
-
     add_library(GocatorGraphicsEngineAdapter STATIC
         Utility/GraphicsEngine/GocatorDataSetGraphicsFrameAdapter.h
         Utility/GraphicsEngine/GocatorDataSetGraphicsFrameAdapter.cpp
@@ -238,7 +236,6 @@ if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
         PUBLIC
             gocator_core
             GraphicsEngine::Contracts
-            Qt6::Gui
         PRIVATE
             OpenMP::OpenMP_CXX
     )

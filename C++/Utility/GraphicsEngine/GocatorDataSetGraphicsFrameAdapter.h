@@ -6,6 +6,7 @@
  */
 
 #include "engine/GraphicsFrameAdapter.h"
+#include "Gocator.h"
 
 #include <optional>
 
@@ -29,4 +30,21 @@ private:
     [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
         const GoPxLSdk::GoDataSet& dataSet,
         const GraphicsFrameRequest& request) const;
+};
+
+/** Owns Gocator SDK callback registration and emits only owned GraphicsFrame values. */
+class GocatorGraphicsFrameStream final
+{
+public:
+    GocatorGraphicsFrameStream(Gocator* gocator, GraphicsFrameCallback callback);
+    ~GocatorGraphicsFrameStream();
+
+    GocatorGraphicsFrameStream(const GocatorGraphicsFrameStream&) = delete;
+    GocatorGraphicsFrameStream& operator=(const GocatorGraphicsFrameStream&) = delete;
+
+private:
+    Gocator* _gocator = nullptr;
+    GraphicsFrameCallback _callback;
+    GocatorDataSetGraphicsFrameAdapter _adapter;
+    Gocator::CallbackId _grabCallbackId = 0;
 };
