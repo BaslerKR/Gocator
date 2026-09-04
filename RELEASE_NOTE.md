@@ -1,5 +1,6 @@
 ## Unreleased
 
+- Route Gocator 3D handoff through the host-owned `GraphicsFrame` payload contract.
 - Make the module the single owner of GoPxL platform selection, resolve Debug libraries per configuration under multi-config generators, reject unsupported bundled architectures, and preserve explicit SDK directory overrides.
 - Split the opt-in `Gocator::QtWidget` static target from `gocator_core`; Qt integration is now disabled by default and fails configuration explicitly when requested without Qt 6.
 

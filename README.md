@@ -39,7 +39,7 @@ target_link_libraries(qt_consumer PRIVATE Gocator::QtWidget)
 
 Requesting the UI without an available Qt 6 Widgets/Concurrent package is a configure error. The contents and public dependencies of `gocator_core` do not change when the UI is enabled.
 
-The optional scene adapter is disabled by default and requires a neutral scene-contract target before this module is configured; it does not require the visualization renderer.
+The optional GraphicsFrame adapter is disabled by default and requires the neutral GraphicsEngine contract target; it does not require the visualization renderer.
 
 ## Acquisition Contract
 

@@ -222,10 +222,11 @@ if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
     endif()
 
     find_package(OpenMP REQUIRED COMPONENTS CXX)
+    find_package(Qt6 REQUIRED COMPONENTS Gui)
 
     add_library(GocatorGraphicsEngineAdapter STATIC
-        Utility/GraphicsEngine/GocatorDataSetScene3DAdapter.h
-        Utility/GraphicsEngine/GocatorDataSetScene3DAdapter.cpp
+        Utility/GraphicsEngine/GocatorDataSetGraphicsFrameAdapter.h
+        Utility/GraphicsEngine/GocatorDataSetGraphicsFrameAdapter.cpp
     )
     add_library(Gocator::GraphicsEngineAdapter ALIAS GocatorGraphicsEngineAdapter)
     target_compile_features(GocatorGraphicsEngineAdapter PUBLIC cxx_std_17)
@@ -237,6 +238,7 @@ if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
         PUBLIC
             gocator_core
             GraphicsEngine::Contracts
+            Qt6::Gui
         PRIVATE
             OpenMP::OpenMP_CXX
     )

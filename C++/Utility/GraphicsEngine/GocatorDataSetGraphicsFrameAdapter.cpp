@@ -1,4 +1,4 @@
-#include "GocatorDataSetScene3DAdapter.h"
+#include "GocatorDataSetGraphicsFrameAdapter.h"
 
 #include <GoPxLSdk/GoDataSet.h>
 #include <GoPxLSdk/GoGdpMsg/GoGdpMsgDef.h>
@@ -202,25 +202,23 @@ void applyCommonFrameFields(RangeFrame& frame,
     return {};
 }
 
-[[nodiscard]] GraphicsScene3D makeScene(RangeFrame&& frame,
+[[nodiscard]] GraphicsFrame makeFrame(RangeFrame&& frame,
                                         const GoPxLSdk::GoGdpMsg& msg,
                                         const StampInfo& stamp,
-                                        const GraphicsScene3DRequest& request)
+                                        const GraphicsFrameRequest& request)
 {
-    GraphicsScene3D scene;
-    scene.content = GraphicsScene3DContent::RangeFrame;
-    scene.rangeFrame = std::move(frame);
-    scene.meta.sourceName = "LMI Gocator";
-    scene.meta.frameId = frameId(msg, stamp);
-    scene.meta.frameIndex = stamp.valid ? stamp.frameIndex : msg.DataSetId();
-    scene.meta.retainSurfaceMesh = request.retainSurfaceMesh;
-    return scene;
+    GraphicsFrame result;
+    result.rangeFrame = std::move(frame);
+    result.metadata.sourceName = "LMI Gocator";
+    result.metadata.frameId = frameId(msg, stamp);
+    result.metadata.frameIndex = stamp.valid ? stamp.frameIndex : msg.DataSetId();
+    return result;
 }
 
 [[nodiscard]] std::optional<RangeFrame> convertUniformSurface(
     const GoPxLSdk::GoGdpSurfaceUniform& msg,
     const StampInfo& stamp,
-    const GraphicsScene3DRequest& request)
+    const GraphicsFrameRequest& request)
 {
     const auto width = positiveInt(msg.Width());
     const auto height = positiveInt(msg.Length());
@@ -283,7 +281,7 @@ void applyCommonFrameFields(RangeFrame& frame,
 [[nodiscard]] std::optional<RangeFrame> convertSurfacePointCloud(
     const GoPxLSdk::GoGdpSurfacePointCloud& msg,
     const StampInfo& stamp,
-    const GraphicsScene3DRequest& request)
+    const GraphicsFrameRequest& request)
 {
     const auto width = positiveInt(msg.Width());
     const auto height = positiveInt(msg.Length());
@@ -352,7 +350,7 @@ void applyCommonFrameFields(RangeFrame& frame,
 [[nodiscard]] std::optional<RangeFrame> convertUniformProfile(
     const GoPxLSdk::GoGdpProfileUniform& msg,
     const StampInfo& stamp,
-    const GraphicsScene3DRequest& request)
+    const GraphicsFrameRequest& request)
 {
     const auto width = positiveInt(msg.Width());
     if (!width.has_value())
@@ -411,7 +409,7 @@ void applyCommonFrameFields(RangeFrame& frame,
 [[nodiscard]] std::optional<RangeFrame> convertProfilePointCloud(
     const GoPxLSdk::GoGdpProfilePointCloud& msg,
     const StampInfo& stamp,
-    const GraphicsScene3DRequest& request)
+    const GraphicsFrameRequest& request)
 {
     const auto width = positiveInt(msg.Width());
     if (!width.has_value())
@@ -472,11 +470,11 @@ void applyCommonFrameFields(RangeFrame& frame,
 }
 }
 
-std::optional<GraphicsScene3D> GocatorDataSetScene3DAdapter::convertScene3D(
+std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphicsFrame(
     const GoPxLSdk::GoDataSet& dataSet,
-    const GraphicsScene3DRequest& request) const
+    const GraphicsFrameRequest& request) const
 {
-    if (!hasScene3DContent(request.content, GraphicsScene3DContent::RangeFrame))
+    if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range))
     {
         return std::nullopt;
     }
@@ -511,7 +509,7 @@ std::optional<GraphicsScene3D> GocatorDataSetScene3DAdapter::convertScene3D(
 
         if (frame.has_value())
         {
-            return makeScene(std::move(*frame), msg, stamp, request);
+            return makeFrame(std::move(*frame), msg, stamp, request);
         }
     }
 
