@@ -205,8 +205,7 @@ void applyCommonFrameFields(RangeFrame& frame,
 
 [[nodiscard]] GraphicsFrame makeFrame(RangeFrame&& frame,
                                         const GoPxLSdk::GoGdpMsg& msg,
-                                        const StampInfo& stamp,
-                                        const GraphicsFrameRequest& request)
+                                        const StampInfo& stamp)
 {
     GraphicsFrame result;
     result.rangeFrame = std::move(frame);
@@ -512,7 +511,7 @@ std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphics
 
         if (frame.has_value())
         {
-            return makeFrame(std::move(*frame), msg, stamp, request);
+            return makeFrame(std::move(*frame), msg, stamp);
         }
     }
 
@@ -524,9 +523,9 @@ namespace {
 [[nodiscard]] GraphicsFrameRequest gocatorGraphicsFrameRequest() noexcept
 {
     GraphicsFrameRequest request;
-    request.components = GraphicsFrameComponent::Range
-        | GraphicsFrameComponent::PointCloud
-        | GraphicsFrameComponent::Image;
+    // Gocator GDP messages carry measured range data. Point-cloud/surface
+    // views are derived by GraphicsEngine from this authoritative payload.
+    request.components = GraphicsFrameComponent::Range;
     request.includeRangeAuxiliaryChannels = true;
     request.includePointCloudColors = true;
     return request;
@@ -544,8 +543,11 @@ GocatorGraphicsFrameStream::GocatorGraphicsFrameStream(
         return;
     }
 
+    const auto callbackToken = _callbackGate.token();
     _grabCallbackId = _gocator->registerGrabCallback(
-        [this](const GoPxLSdk::GoDataSet& dataSet, const std::size_t sequence) {
+        [this, callbackToken](const GoPxLSdk::GoDataSet& dataSet, const std::size_t sequence) {
+            GraphicsFrameCallbackGate::Lease lease(callbackToken);
+            if (!lease) return;
             try
             {
                 auto frame = _adapter.convertFrame(dataSet, gocatorGraphicsFrameRequest());
@@ -569,8 +571,10 @@ GocatorGraphicsFrameStream::GocatorGraphicsFrameStream(
 
 GocatorGraphicsFrameStream::~GocatorGraphicsFrameStream()
 {
+    _callbackGate.beginShutdown();
     if (_gocator && _grabCallbackId != 0U)
     {
         _gocator->deregisterGrabCallback(_grabCallbackId);
     }
+    _callbackGate.waitForDrain();
 }

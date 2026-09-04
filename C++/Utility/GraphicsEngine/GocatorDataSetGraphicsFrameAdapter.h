@@ -46,5 +46,6 @@ private:
     Gocator* _gocator = nullptr;
     GraphicsFrameCallback _callback;
     GocatorDataSetGraphicsFrameAdapter _adapter;
+    GraphicsFrameCallbackGate _callbackGate;
     Gocator::CallbackId _grabCallbackId = 0;
 };

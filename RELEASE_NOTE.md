@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Keep Gocator GDP adapters range-only; GraphicsEngine derives point-cloud and surface views from the authoritative range payload.
+- Drain in-flight GraphicsFrame adapter callbacks before stream destruction and add an empty-dataset adapter test.
 - Move GDP callback registration and GraphicsFrame conversion into the module adapter stream; the parent receives only owned GraphicsFrame values.
 - Mark point-cloud range conversions as `ExplicitXY` when per-sample coordinates are supplied.
 - Keep the GraphicsFrame adapter target independent of Qt GUI.

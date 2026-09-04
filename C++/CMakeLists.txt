@@ -239,5 +239,25 @@ if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
         PRIVATE
             OpenMP::OpenMP_CXX
     )
+
+    if(GOCATOR_BUILD_TESTS)
+        add_executable(GocatorGraphicsFrameAdapterTests
+            tests/GraphicsFrameAdapterTest.cpp
+        )
+        target_compile_features(GocatorGraphicsFrameAdapterTests PRIVATE cxx_std_17)
+        target_link_libraries(GocatorGraphicsFrameAdapterTests
+            PRIVATE Gocator::GraphicsEngineAdapter
+        )
+        if(WIN32)
+            add_test(NAME GocatorGraphicsFrameAdapterTests
+                COMMAND ${CMAKE_COMMAND} -E env
+                    "PATH=${GOPXL_SDK_DIR}/lib/${gopxl_platform_dir};$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+                    $<TARGET_FILE:GocatorGraphicsFrameAdapterTests>)
+        else()
+            add_test(NAME GocatorGraphicsFrameAdapterTests
+                COMMAND GocatorGraphicsFrameAdapterTests)
+        endif()
+    endif()
+
     message(STATUS "[Gocator] Gocator::GraphicsEngineAdapter enabled.")
 endif()
