@@ -31,21 +31,3 @@ private:
         const GoPxLSdk::GoDataSet& dataSet,
         const GraphicsFrameRequest& request) const;
 };
-
-/** Owns Gocator SDK callback registration and emits only owned GraphicsFrame values. */
-class GocatorGraphicsFrameStream final
-{
-public:
-    GocatorGraphicsFrameStream(Gocator* gocator, GraphicsFrameCallback callback);
-    ~GocatorGraphicsFrameStream();
-
-    GocatorGraphicsFrameStream(const GocatorGraphicsFrameStream&) = delete;
-    GocatorGraphicsFrameStream& operator=(const GocatorGraphicsFrameStream&) = delete;
-
-private:
-    Gocator* _gocator = nullptr;
-    GraphicsFrameCallback _callback;
-    GocatorDataSetGraphicsFrameAdapter _adapter;
-    GraphicsFrameCallbackGate _callbackGate;
-    Gocator::CallbackId _grabCallbackId = 0;
-};

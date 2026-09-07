@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Publish GraphicsFrame through `GocatorGraphicsFrameStream`; the converter header stays in the adapter translation unit.
+
 - Keep Gocator GDP adapters range-only; GraphicsEngine derives point-cloud and surface views from the authoritative range payload.
 - Drain in-flight GraphicsFrame adapter callbacks before stream destruction and add an empty-dataset adapter test.
 - Move GDP callback registration and GraphicsFrame conversion into the module adapter stream; the parent receives only owned GraphicsFrame values.

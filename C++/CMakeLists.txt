@@ -225,6 +225,8 @@ if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
     add_library(GocatorGraphicsEngineAdapter STATIC
         Utility/GraphicsEngine/GocatorDataSetGraphicsFrameAdapter.h
         Utility/GraphicsEngine/GocatorDataSetGraphicsFrameAdapter.cpp
+        Utility/GraphicsEngine/GocatorGraphicsFrameStream.h
+        Utility/GraphicsEngine/GocatorGraphicsFrameStream.cpp
     )
     add_library(Gocator::GraphicsEngineAdapter ALIAS GocatorGraphicsEngineAdapter)
     target_compile_features(GocatorGraphicsEngineAdapter PUBLIC cxx_std_17)
