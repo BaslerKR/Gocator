@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Link `Playground::DevicePlugin` for the `IDevicePlugin` MODULE.
+- Own package identity in `Utility/PlaygroundAdapter/Package/Package.cmake`; the host emits `plugin.json` from `DevicePluginPackage.h`.
+- Keep the session source controller in `Utility/PlaygroundAdapter/Source` as `GocatorSourceController`.
+- Declare the Playground plugin runtime payload from this module; the host copies it into the package.
+- Move the GraphicsFrame stream/adapter into `Utility/PlaygroundAdapter` as `Gocator::PlaygroundAdapter`.
 - Publish GraphicsFrame through `GocatorGraphicsFrameStream`; the converter header stays in the adapter translation unit.
 
 - Keep Gocator GDP adapters range-only; GraphicsEngine derives point-cloud and surface views from the authoritative range payload.

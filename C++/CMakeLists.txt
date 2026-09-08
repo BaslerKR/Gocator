@@ -11,8 +11,12 @@ set(GOPXL_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../GoPxL-SDK" CACHE PATH "GoPxL S
 set(GOCATOR_DEFAULT_QT_PREFIX "/opt/Qt/6.7.2/gcc_64" CACHE PATH "Default Qt prefix")
 option(GOCATOR_BUILD_QT_UI "Build the optional Qt Widgets integration target" OFF)
 option(GOCATOR_BUILD_TESTS "Build focused Gocator module tests" OFF)
-option(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER
-    "Build the optional Gocator-to-GraphicsEngine adapter target."
+option(GOCATOR_BUILD_PLAYGROUND_ADAPTER
+    "Build the optional Gocator Playground adapter target."
+    OFF
+)
+option(GOCATOR_BUILD_PLAYGROUND_PLUGIN
+    "Build the Gocator Playground device plugin MODULE."
     OFF
 )
 
@@ -213,28 +217,29 @@ foreach(target ${gocator_runtime_targets})
     )
 endforeach()
 
-if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
+if(GOCATOR_BUILD_PLAYGROUND_ADAPTER)
     if(NOT TARGET GraphicsEngine::Contracts)
         message(FATAL_ERROR
-            "[Gocator] GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER=ON requires "
+            "[Gocator] GOCATOR_BUILD_PLAYGROUND_ADAPTER=ON requires "
             "GraphicsEngine::Contracts. Add GraphicsEngine first or disable the adapter."
         )
     endif()
 
     find_package(OpenMP REQUIRED COMPONENTS CXX)
-    add_library(GocatorGraphicsEngineAdapter STATIC
-        Utility/GraphicsEngine/GocatorDataSetGraphicsFrameAdapter.h
-        Utility/GraphicsEngine/GocatorDataSetGraphicsFrameAdapter.cpp
-        Utility/GraphicsEngine/GocatorGraphicsFrameStream.h
-        Utility/GraphicsEngine/GocatorGraphicsFrameStream.cpp
+    add_library(GocatorPlaygroundAdapter STATIC
+        Utility/PlaygroundAdapter/GocatorDataSetGraphicsFrameAdapter.h
+        Utility/PlaygroundAdapter/GocatorDataSetGraphicsFrameAdapter.cpp
+        Utility/PlaygroundAdapter/GocatorGraphicsFrameStream.h
+        Utility/PlaygroundAdapter/GocatorGraphicsFrameStream.cpp
     )
-    add_library(Gocator::GraphicsEngineAdapter ALIAS GocatorGraphicsEngineAdapter)
-    target_compile_features(GocatorGraphicsEngineAdapter PUBLIC cxx_std_17)
-    target_include_directories(GocatorGraphicsEngineAdapter
+    add_library(Gocator::PlaygroundAdapter ALIAS GocatorPlaygroundAdapter)
+    target_compile_features(GocatorPlaygroundAdapter PUBLIC cxx_std_17)
+    target_include_directories(GocatorPlaygroundAdapter
         PUBLIC
-            "${CMAKE_CURRENT_SOURCE_DIR}/Utility/GraphicsEngine"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter"
     )
-    target_link_libraries(GocatorGraphicsEngineAdapter
+    target_link_libraries(GocatorPlaygroundAdapter
         PUBLIC
             gocator_core
             GraphicsEngine::Contracts
@@ -244,11 +249,11 @@ if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
 
     if(GOCATOR_BUILD_TESTS)
         add_executable(GocatorGraphicsFrameAdapterTests
-            tests/GraphicsFrameAdapterTest.cpp
+            Utility/PlaygroundAdapter/Tests/GraphicsFrameAdapterTest.cpp
         )
         target_compile_features(GocatorGraphicsFrameAdapterTests PRIVATE cxx_std_17)
         target_link_libraries(GocatorGraphicsFrameAdapterTests
-            PRIVATE Gocator::GraphicsEngineAdapter
+            PRIVATE Gocator::PlaygroundAdapter
         )
         if(WIN32)
             add_test(NAME GocatorGraphicsFrameAdapterTests
@@ -261,5 +266,68 @@ if(GOCATOR_BUILD_GRAPHICSENGINE_ADAPTER)
         endif()
     endif()
 
-    message(STATUS "[Gocator] Gocator::GraphicsEngineAdapter enabled.")
+    message(STATUS "[Gocator] Gocator::PlaygroundAdapter enabled.")
+endif()
+
+if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
+    if(NOT GOCATOR_BUILD_PLAYGROUND_ADAPTER)
+        message(FATAL_ERROR
+            "[Gocator] GOCATOR_BUILD_PLAYGROUND_PLUGIN=ON requires "
+            "GOCATOR_BUILD_PLAYGROUND_ADAPTER."
+        )
+    endif()
+    if(NOT GOCATOR_BUILD_QT_UI)
+        message(FATAL_ERROR
+            "[Gocator] GOCATOR_BUILD_PLAYGROUND_PLUGIN=ON requires "
+            "GOCATOR_BUILD_QT_UI."
+        )
+    endif()
+    if(NOT TARGET Playground::DevicePlugin)
+        message(FATAL_ERROR
+            "[Gocator] GOCATOR_BUILD_PLAYGROUND_PLUGIN=ON requires "
+            "Playground::DevicePlugin."
+        )
+    endif()
+    if(NOT TARGET Qt6::Widgets)
+        message(FATAL_ERROR
+            "[Gocator] GOCATOR_BUILD_PLAYGROUND_PLUGIN=ON requires Qt 6."
+        )
+    endif()
+    find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Concurrent)
+
+    add_library(GocatorPlugin MODULE
+        Utility/PlaygroundAdapter/Plugin/GocatorPlugin.cpp
+        Utility/PlaygroundAdapter/Source/GocatorSourceController.h
+        Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
+    )
+    set_target_properties(GocatorPlugin PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME GocatorPlugin
+        AUTOMOC ON
+        PLAYGROUND_PLUGIN_PACKAGE
+            "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/Package.cmake"
+    )
+    target_compile_features(GocatorPlugin PRIVATE cxx_std_17)
+    target_include_directories(GocatorPlugin PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Source"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Plugin"
+    )
+    target_link_libraries(GocatorPlugin PRIVATE
+        Playground::DevicePlugin
+        gocator_core
+        Gocator::QtWidget
+        Gocator::PlaygroundAdapter
+        Qt6::Widgets
+        Qt6::OpenGL
+        Qt6::OpenGLWidgets
+        Qt6::Concurrent
+    )
+    set_target_properties(GocatorPlugin PROPERTIES
+        BUILD_RPATH "${GOPXL_SDK_DIR}/lib/${gopxl_platform_dir}"
+        INSTALL_RPATH "@executable_path/../GoPxL-SDK/lib/${gopxl_platform_dir}"
+    )
+    include("${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/RuntimeStaging.cmake")
+    gocator_prepare_playground_plugin_runtime(GocatorPlugin)
+    message(STATUS "[Gocator] GocatorPlugin enabled.")
 endif()
