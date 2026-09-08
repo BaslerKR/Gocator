@@ -33,6 +33,9 @@ function(gocator_prepare_playground_plugin_runtime target_name)
     list(APPEND search_paths "${gopxl_sdk_lib_dir}")
 
     if(APPLE)
+        set(payload_dir "${CMAKE_CURRENT_BINARY_DIR}/plugin-runtime")
+        file(REMOVE_RECURSE "${payload_dir}")
+        file(MAKE_DIRECTORY "${payload_dir}")
         set(gocator_macos_runtime_files
             "${gopxl_sdk_lib_dir}/libGoApi.dylib"
             "${gopxl_sdk_lib_dir}/libGoPxLSdk.dylib"
@@ -43,7 +46,7 @@ function(gocator_prepare_playground_plugin_runtime target_name)
                 message(FATAL_ERROR
                     "[Gocator] Required GoPxL macOS runtime is missing: ${gocator_runtime_file}")
             endif()
-            list(APPEND host_bundle_files "${gocator_runtime_file}")
+            file(COPY "${gocator_runtime_file}" DESTINATION "${payload_dir}")
         endforeach()
     endif()
 
