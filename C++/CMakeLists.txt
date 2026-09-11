@@ -315,7 +315,6 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
     )
     target_link_libraries(GocatorPlugin PRIVATE
         Playground::DevicePlugin
-        gocator_core
         Gocator::QtWidget
         Gocator::PlaygroundAdapter
         Qt6::Widgets

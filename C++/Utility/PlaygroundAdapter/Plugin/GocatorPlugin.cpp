@@ -1,4 +1,4 @@
-#include "DevicePlugin.h"
+#include "DevicePluginTemplate.h"
 
 #include "GocatorSourceController.h"
 #include "Gocator.h"
@@ -122,15 +122,21 @@ public:
     }
 
     QString title() const override { return _titleState->title(); }
-    QWidget* createControlWidget(QWidget* parent) override
+    std::vector<DevicePluginDock> createDockWidgets(QWidget* parent) override
     {
         if (!_widget) {
             _widget = new QGocatorWidget(parent, _gocator.get());
             _widget->setDiscoveredDevices(_devices);
         }
-        return _widget;
+        return {{QStringLiteral("device-controls"), QStringLiteral("Device Controls"),
+                 Qt::LeftDockWidgetArea, _widget, true}};
     }
     AbstractSourceController* sourceController() const override { return _controller.get(); }
+    unsigned int capabilities() const noexcept override
+    {
+        return DevicePluginSessionCapability::GraphicsEngine
+            | DevicePluginSessionCapability::ScriptEditor;
+    }
     void setTitleChangedCallback(std::function<void(const QString&)> callback) override { _titleState->setCallback(std::move(callback)); }
 
 private:
@@ -142,7 +148,7 @@ private:
     std::shared_ptr<GocatorPluginTitleState> _titleState = std::make_shared<GocatorPluginTitleState>();
 };
 
-class GocatorPlugin final : public QObject, public IDevicePlugin {
+class GocatorPlugin final : public DevicePluginTemplate {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID PlaygroundDevicePlugin_iid)
     Q_INTERFACES(IDevicePlugin)
