@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Isolate status and grab callback exceptions so consumer failures cannot escape into the GDP acquisition thread.
+
 - Publish the device controls through the generic host-managed plugin dock contract.
 
 - Link `GocatorPlugin` only through `Gocator::QtWidget` and `Gocator::PlaygroundAdapter` so `libgocator_core.a` is not passed twice to the linker.

@@ -178,9 +178,18 @@ struct Gocator::Impl
 
         for (const auto& cb : callbacks)
         {
-            if (cb)
+            if (!cb) continue;
+            try
             {
                 cb(status, on);
+            }
+            catch (const std::exception& e)
+            {
+                Gocator::syslog("Gocator status callback failed: " + std::string(e.what()), true);
+            }
+            catch (...)
+            {
+                Gocator::syslog("Gocator status callback failed with an unknown exception.", true);
             }
         }
     }
@@ -425,9 +434,18 @@ struct Gocator::Impl
 
             for (const auto& cb : callbacks)
             {
-                if (cb)
+                if (!cb) continue;
+                try
                 {
                     cb(dataSet, frameSeq);
+                }
+                catch (const std::exception& e)
+                {
+                    Gocator::syslog("Gocator grab callback failed: " + std::string(e.what()), true);
+                }
+                catch (...)
+                {
+                    Gocator::syslog("Gocator grab callback failed with an unknown exception.", true);
                 }
             }
         }
