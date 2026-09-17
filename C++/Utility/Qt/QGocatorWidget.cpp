@@ -12,8 +12,6 @@
 #include <QScrollBar>
 #include <QLabel>
 #include <QStatusBar>
-#include <QTimer>
-#include <QStyle>
 #include <QPointer>
 #include <QMetaObject>
 #include <QIcon>
@@ -73,13 +71,6 @@ std::string formatDeviceName(const std::string& model, const std::string& serial
     return displayName + " (" + serialStr + ") - " + address;
 }
 
-void repolish(QWidget* widget)
-{
-    if(!widget) return;
-    widget->style()->unpolish(widget);
-    widget->style()->polish(widget);
-    widget->update();
-}
 
 /**
  * Returns the number of decimal places needed to represent a finite value.
@@ -249,23 +240,6 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     _statusLabel->setAlignment(Qt::AlignCenter);
     _statusBar->addWidget(_statusLabel);
 
-    _messageLabel = new QLabel(this);
-    _messageLabel->setObjectName(QStringLiteral("GocatorMessageLabel"));
-    _messageLabel->setProperty("statusRole", "message");
-    _messageLabel->setProperty("messageState", "normal");
-    _messageLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    _messageLabel->hide();
-    _statusBar->addWidget(_messageLabel, 1);
-
-    _messageTimer = new QTimer(this);
-    _messageTimer->setSingleShot(true);
-    connect(_messageTimer, &QTimer::timeout, this, [this]() {
-        if (_messageLabel) {
-            _messageLabel->clear();
-            _messageLabel->hide();
-        }
-    });
-
     mainLayout->addWidget(_statusBar);
 
     // Connections
@@ -422,7 +396,6 @@ void QGocatorWidget::onConnectToggled(bool toggled)
 {
     if (!_gocator || _shuttingDown) return;
 
-    _connectionAttempted = true;
     setConnectionOperationActive(true);
     if (toggled)
     {
@@ -449,7 +422,7 @@ void QGocatorWidget::onConnectToggled(bool toggled)
 void QGocatorWidget::onGrabOneClicked()
 {
     if (!_gocator || _shuttingDown) return;
-    showStatusMessage(tr("Starting single grab..."), false, 0);
+    logMessage(tr("Starting single grab..."), false);
     _gocator->configure(scanLengthMm(), scanMode(), intensityEnabled(), uniformSpacingEnabled(), exposureUs());
     _gocator->grab(1);
 }
@@ -460,13 +433,13 @@ void QGocatorWidget::onGrabLiveToggled(bool toggled)
 
     if (toggled)
     {
-        showStatusMessage(tr("Starting live grab..."), false, 0);
+        logMessage(tr("Starting live grab..."), false);
         _gocator->configure(scanLengthMm(), scanMode(), intensityEnabled(), uniformSpacingEnabled(), exposureUs());
         _gocator->grab();
     }
     else
     {
-        showStatusMessage(tr("Stopping grab..."), false, 0);
+        logMessage(tr("Stopping grab..."), false);
         _gocator->stop();
     }
 }
@@ -479,9 +452,7 @@ void QGocatorWidget::handleStatusChanged(Gocator::Status status, bool on)
     {
         updateGrabState(on);
         setRunningState(on);
-        showStatusMessage(on ? tr("Grabbing started.") : tr("Grabbing stopped."),
-                          false,
-                          on ? 0 : 3000);
+        logMessage(on ? tr("Grabbing started.") : tr("Grabbing stopped."));
 
         QSignalBlocker blocker(_toolGrabLive);
         _toolGrabLive->setChecked(on);
@@ -518,7 +489,7 @@ void QGocatorWidget::applyConnectionState(bool opened)
 
     if (opened)
     {
-        _connectionAttempted = true;
+
     }
 
     _ipCombo->setEnabled(!opened);
@@ -531,7 +502,7 @@ void QGocatorWidget::applyConnectionState(bool opened)
 
     if (opened)
     {
-        showStatusMessage(tr("Gocator connected successfully."), false, 3000);
+        logMessage(tr("Gocator connected successfully."), false);
         setRunningState(false);
         populateFeatures();
 
@@ -572,31 +543,14 @@ void QGocatorWidget::applyConnectionState(bool opened)
 
 void QGocatorWidget::setStatus(const QString& status)
 {
-    int timeout = 0;
-    if (status == QStringLiteral("Discovery completed")
-        || status.startsWith(QStringLiteral("Discovered"))
-        || status == QStringLiteral("Connection Failed")
-        || status == QStringLiteral("No devices found"))
-    {
-        timeout = 3000;
-    }
-    showStatusMessage(status, false, timeout);
+    logMessage(status);
 }
 
-void QGocatorWidget::showStatusMessage(const QString& msg, bool isError, int timeout)
+void QGocatorWidget::logMessage(const QString& message, bool error)
 {
-    if (!_messageLabel || _shuttingDown) return;
-
-    _messageTimer->stop();
-    _messageLabel->setText(msg);
-    _messageLabel->setToolTip(msg);
-    _messageLabel->setProperty("messageState", isError ? "error" : "normal");
-    repolish(_messageLabel);
-    _messageLabel->setVisible(!msg.isEmpty());
-
-    if (timeout > 0) {
-        _messageTimer->start(timeout);
-    }
+    if (message.isEmpty()) return;
+    if (error) qWarning().noquote() << "[Gocator UI]" << message;
+    else qInfo().noquote() << "[Gocator UI]" << message;
 }
 
 void QGocatorWidget::updateGrabState(bool grabbing)
@@ -610,31 +564,8 @@ void QGocatorWidget::updateStatusLabel()
     if (!_statusLabel || _shuttingDown) return;
 
     const bool opened = _gocator && _gocator->isOpened();
-
-    if (_parameterUpdateActive) {
-        _statusLabel->setText(tr("Updating"));
-        _statusLabel->setProperty("status", "idle");
-    } else if (_connectWatcher.isRunning()) {
-        _statusLabel->setText(tr("Connecting"));
-        _statusLabel->setProperty("status", "idle");
-    } else if (_discoverWatcher.isRunning()) {
-        _statusLabel->setText(tr("Scanning"));
-        _statusLabel->setProperty("status", "idle");
-    } else if (!opened && !_connectionAttempted) {
-        _statusLabel->setText(tr("Idle"));
-        _statusLabel->setProperty("status", "idle");
-    } else if (!opened) {
-        _statusLabel->setText(tr("Disconnected"));
-        _statusLabel->setProperty("status", "disconnected");
-    } else if (_grabbing) {
-        _statusLabel->setText(tr("Live"));
-        _statusLabel->setProperty("status", "grabbing");
-    } else {
-        _statusLabel->setText(tr("Connected"));
-        _statusLabel->setProperty("status", "connected");
-    }
-    _statusLabel->style()->unpolish(_statusLabel);
-    _statusLabel->style()->polish(_statusLabel);
+    _statusLabel->setText(!opened ? QStringLiteral("Idle")
+        : _grabbing ? QStringLiteral("Live") : QStringLiteral("Connected"));
 }
 
 void QGocatorWidget::setRunningState(bool running)
@@ -1066,7 +997,7 @@ void QGocatorWidget::onParameterChanged()
     {
         if (_paramWatcher.isRunning())
         {
-            showStatusMessage(tr("Parameter update already in progress."), false, 3000);
+            logMessage(tr("Parameter update already in progress."), false);
             return;
         }
 
@@ -1088,9 +1019,8 @@ void QGocatorWidget::onParameterChanged()
         std::string path = mapping.path.toStdString();
         std::string valStr = jsonValueStr.toStdString();
 
-        showStatusMessage(tr("Updating parameter '%1' to %2...").arg(mapping.label, jsonValueStr),
-                          false,
-                          3000);
+        logMessage(tr("Updating parameter '%1' to %2...").arg(mapping.label, jsonValueStr),
+                          false);
 
         Gocator* gocator = _gocator;
         auto future = QtConcurrent::run([gocator, target, path, valStr]() {

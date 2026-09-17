@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Limit the control statusbar to Idle, Connected, and Live; route operation messages to application logs.
+
 - Isolate status and grab callback exceptions so consumer failures cannot escape into the GDP acquisition thread.
 
 - Publish the device controls through the generic host-managed plugin dock contract.

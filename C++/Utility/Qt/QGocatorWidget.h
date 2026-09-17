@@ -16,7 +16,6 @@ class QCheckBox;
 class QToolButton;
 class QTreeWidget;
 class QLabel;
-class QTimer;
 class QStatusBar;
 
 class QGocatorWidget : public QWidget
@@ -101,7 +100,6 @@ private:
     Gocator *_gocator = nullptr;
     Gocator::CallbackId _statusCallbackId = 0;
     bool _shuttingDown = false;
-    bool _connectionAttempted = false;
 
     QComboBox *_ipCombo = nullptr;
     QToolButton *_toolRefresh = nullptr;
@@ -114,11 +112,10 @@ private:
     QMap<QString, class QJsonValue> _pendingParams;
 
     QStatusBar *_statusBar = nullptr;
-    QLabel *_messageLabel = nullptr;
     QLabel *_statusLabel = nullptr;
-    QTimer *_messageTimer = nullptr;
 
-    void showStatusMessage(const QString& msg, bool isError = false, int timeout = 0);
+    /** Routes operation diagnostics to application logs. */
+    void logMessage(const QString& msg, bool isError = false);
     void updateGrabState(bool grabbing);
     void updateStatusLabel();
 
