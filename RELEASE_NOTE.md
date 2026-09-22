@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Publish range output through the identified GraphicsFrame resource collection contract.
+
 - Limit the control statusbar to Idle, Connected, and Live; route operation messages to application logs.
 
 - Isolate status and grab callback exceptions so consumer failures cannot escape into the GDP acquisition thread.
@@ -8,7 +10,7 @@
 
 - Link `GocatorPlugin` only through `Gocator::QtWidget` and `Gocator::PlaygroundAdapter` so `libgocator_core.a` is not passed twice to the linker.
 
-- Require ABI / Qt IID 4.0 and recompilation; v3 packages are rejected. Declare immutable GraphicsEngine + Script Editor capabilities directly on the session.
+- Require ABI / Qt IID 5.0 and recompilation; older packages are rejected. Declare immutable GraphicsEngine + Script Editor capabilities directly on the session.
 
 - Stage GoPxL dylibs in the Playground plugin `runtime` payload on macOS instead of the host `Contents/Frameworks` extra list.
 

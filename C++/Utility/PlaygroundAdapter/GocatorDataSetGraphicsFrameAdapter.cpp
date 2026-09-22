@@ -207,7 +207,7 @@ void applyCommonFrameFields(RangeFrame& frame,
                                         const StampInfo& stamp)
 {
     GraphicsFrame result;
-    result.rangeFrame = std::move(frame);
+    result.addRange("range", std::move(frame), "Range");
     result.metadata.sourceName = "LMI Gocator";
     result.metadata.frameId = frameId(msg, stamp);
     result.metadata.frameIndex = stamp.valid ? stamp.frameIndex : msg.DataSetId();
