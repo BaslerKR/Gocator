@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Declare the Gocator display name, LMI GoPxL subtitle, and profile/surface acquisition summary in package metadata.
+
 - Publish range output through the identified GraphicsFrame resource collection contract.
 
 - Limit the control statusbar to Idle, Connected, and Live; route operation messages to application logs.
