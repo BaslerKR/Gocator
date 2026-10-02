@@ -42,6 +42,7 @@ void GocatorSourceController::registerCallbacks() {
     _statusCallbackId = _gocator->registerStatusCallback([this](Gocator::Status status, bool on) {
         if (status == Gocator::GrabbingStatus) {
             _isGrabbing = on;
+            emit diagnosticAcquisitionChanged(on, QStringLiteral("gocator"));
         }
     });
 

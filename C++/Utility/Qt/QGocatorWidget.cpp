@@ -23,6 +23,8 @@
 #include <QJsonValue>
 #include <QSignalBlocker>
 #include <QDebug>
+#include <QLoggingCategory>
+Q_LOGGING_CATEGORY(gocatorDiagnosticLog, "diagnostics.Gocator", QtInfoMsg)
 #include <QtConcurrent>
 #include <algorithm>
 #include <cctype>
@@ -453,6 +455,7 @@ void QGocatorWidget::handleStatusChanged(Gocator::Status status, bool on)
         updateGrabState(on);
         setRunningState(on);
         logMessage(on ? tr("Grabbing started.") : tr("Grabbing stopped."));
+        if (!on && gocatorDiagnosticLog().isDebugEnabled()) updateFeatureValues();
 
         QSignalBlocker blocker(_toolGrabLive);
         _toolGrabLive->setChecked(on);
@@ -1027,6 +1030,11 @@ void QGocatorWidget::onParameterChanged()
             if (gocator)
             {
                 gocator->setParameterValue(target, path, valStr);
+                // The core reports SDK failures; this record confirms dispatch, not readback acceptance.
+                qCDebug(gocatorDiagnosticLog).noquote() << "@diagnostic " + QString::fromUtf8(QJsonDocument(QJsonObject{
+                    {"event", "parameter_dispatched"}, {"fields", QJsonObject{
+                    {"target", static_cast<int>(target)}, {"path", QString::fromStdString(path)},
+                    {"requestedValue", QString::fromStdString(valStr)}, {"verification", "follow-up-resource-read"}}}}).toJson(QJsonDocument::Compact));
             }
         });
         _parameterUpdateActive = true;
@@ -1064,6 +1072,11 @@ void QGocatorWidget::applyFeatureValues(const FeatureDataResult& result)
 {
     QJsonObject scannerData = QJsonDocument::fromJson(result.scannerData.toUtf8()).object();
     QJsonObject sensorData = QJsonDocument::fromJson(result.sensorData.toUtf8()).object();
+    if (gocatorDiagnosticLog().isDebugEnabled())
+        qCDebug(gocatorDiagnosticLog).noquote() << "@diagnostic " + QString::fromUtf8(QJsonDocument(QJsonObject{
+            {"event", "feature_snapshot"}, {"fields", QJsonObject{{"coverage", "scanner-and-sensor-resources"},
+            {"scanner", scannerData}, {"sensor", sensorData},
+            {"complete", !scannerData.isEmpty() && !sensorData.isEmpty()}}}}).toJson(QJsonDocument::Compact));
 
     QJsonObject scannerParams = scannerData.value(QStringLiteral("parameters")).toObject();
     QJsonObject sensorParams = sensorData.value(QStringLiteral("parameters")).toObject();

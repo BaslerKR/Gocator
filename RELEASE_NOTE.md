@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Report acquisition lifecycle to consumers and retain opt-in stopped-device feature snapshots at the current selector state; expose parameter requests and operation outcomes through diagnostics without changing capture policy.
+
 - Declare the Gocator display name, LMI GoPxL subtitle, and profile/surface acquisition summary in package metadata.
 
 - Publish range output through the identified GraphicsFrame resource collection contract.
