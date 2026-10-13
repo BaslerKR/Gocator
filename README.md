@@ -67,3 +67,27 @@ Parameter schema, data, and write methods perform synchronous REST requests. A G
 ## Validation
 
 `GOCATOR_BUILD_TESTS=ON` requires `GOCATOR_BUILD_QT_UI=ON` because the focused test executable exercises `QGocatorWidget`. A successful build establishes only compile/link compatibility; discovery, REST configuration, profile/surface payloads, reconnect behavior, and throughput require validation with the intended SDK package and sensor firmware.
+
+## Installed consumer SDK plugin build
+
+Build the existing plugin project using this repository, an installed Plugin
+SDK, the matching Qt kit and its vendor SDK. No consumer source tree or
+renderer is needed. The plugin switch enables its owning widget/adapter
+(and vendor SDK implementation where required). Theme installation remains
+consumer-owned.
+
+```sh
+cmake -S C++ -B build/plugin -DCMAKE_PREFIX_PATH="<PluginSDK>;<Qt-prefix>" -DGOCATOR_BUILD_PLAYGROUND_PLUGIN=ON -DGOCATOR_BUILD_TESTS=ON
+cmake --build build/plugin --config Release --parallel 4
+ctest --test-dir build/plugin -C Release --output-on-failure
+cmake --build build/plugin --config Release --target GocatorPluginPackageStage
+```
+
+Supply the existing vendor SDK options when it is not in the documented default
+location. The generated package is `build/plugin/packages/Release/plugins/<id>/current`
+on multi-configuration generators and retains the module-owned runtime layout.
+It includes the manifest, icon and SDK identity. Staging reconciles only this
+generated package. Use a fresh build directory or explicitly update
+`PlaygroundPluginSDK_DIR` when selecting another SDK. This Release software
+gate does not establish physical-device, Debug or cross-platform acceptance.
+Set `CMAKE_BUILD_TYPE=Release` for a single-configuration generator.

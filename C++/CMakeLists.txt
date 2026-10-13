@@ -20,6 +20,16 @@ option(GOCATOR_BUILD_PLAYGROUND_PLUGIN
     OFF
 )
 
+if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
+    set(GOCATOR_BUILD_PLAYGROUND_ADAPTER ON)
+    set(GOCATOR_BUILD_QT_UI ON)
+endif()
+if(PROJECT_NAME STREQUAL "Gocator" AND PROJECT_IS_TOP_LEVEL AND
+   (GOCATOR_BUILD_PLAYGROUND_ADAPTER OR GOCATOR_BUILD_PLAYGROUND_PLUGIN))
+    find_package(PlaygroundPluginSDK 0.1 CONFIG REQUIRED)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 if(GOCATOR_BUILD_QT_UI AND NOT CMAKE_PREFIX_PATH AND EXISTS "${GOCATOR_DEFAULT_QT_PREFIX}")
     list(APPEND CMAKE_PREFIX_PATH "${GOCATOR_DEFAULT_QT_PREFIX}")
 endif()
@@ -328,5 +338,26 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
     )
     include("${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/RuntimeStaging.cmake")
     gocator_prepare_playground_plugin_runtime(GocatorPlugin)
+    if(PROJECT_NAME STREQUAL "Gocator" AND PROJECT_IS_TOP_LEVEL)
+        if(APPLE)
+            set_target_properties(GocatorPlugin PROPERTIES BUILD_WITH_INSTALL_RPATH ON
+                INSTALL_RPATH "@loader_path/runtime;@executable_path/../Frameworks")
+        elseif(UNIX)
+            set_target_properties(GocatorPlugin PROPERTIES BUILD_WITH_INSTALL_RPATH ON
+                INSTALL_RPATH "$ORIGIN/runtime")
+        endif()
+        playground_sdk_package_plugin(GocatorPlugin
+            PACKAGE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/Package.cmake"
+            ICON "${PlaygroundPluginSDK_ICON_DIR}/lmi.png")
+    endif()
     message(STATUS "[Gocator] GocatorPlugin enabled.")
 endif()
+
+# Keep contract assertions active in Release validation.
+foreach(module_test IN ITEMS QGocatorWidgetTests GocatorGraphicsFrameAdapterTests)
+    if(TARGET ${module_test})
+        target_compile_options(${module_test} PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>
+            $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
+    endif()
+endforeach()
