@@ -167,7 +167,7 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
 
     _toolRefresh = new QToolButton(this);
     _toolRefresh->setObjectName(QStringLiteral("gocatorToolRefresh"));
-    _toolRefresh->setIcon(QIcon(QStringLiteral(":/Resources/Icons/icons8-refresh-48.png")));
+    _toolRefresh->setIcon(QIcon(QStringLiteral(":/Resources/icon/refresh-48.png")));
     _toolRefresh->setToolButtonStyle(Qt::ToolButtonIconOnly);
     _toolRefresh->setIconSize(QSize(16, 16));
 
@@ -185,7 +185,7 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
 
     _toolGrabOne = new QToolButton(this);
     _toolGrabOne->setObjectName(QStringLiteral("gocatorToolGrabOne"));
-    _toolGrabOne->setIcon(QIcon(QStringLiteral(":/Resources/Icons/icons8-camera-48.png")));
+    _toolGrabOne->setIcon(QIcon(QStringLiteral(":/Resources/icon/camera-48.png")));
     _toolGrabOne->setEnabled(false);
     _toolGrabOne->setToolButtonStyle(Qt::ToolButtonIconOnly);
     _toolGrabOne->setIconSize(QSize(16, 16));
@@ -198,8 +198,8 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     _toolGrabLive->setIconSize(QSize(16, 16));
     {
         QIcon icon;
-        icon.addFile(QStringLiteral(":/Resources/Icons/icons8-cameras-48.png"), QSize(), QIcon::Normal, QIcon::Off);
-        icon.addFile(QStringLiteral(":/Resources/Icons/icons8-pause-48.png"), QSize(), QIcon::Normal, QIcon::On);
+        icon.addFile(QStringLiteral(":/Resources/icon/cameras-48.png"), QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(QStringLiteral(":/Resources/icon/pause-48.png"), QSize(), QIcon::Normal, QIcon::On);
         _toolGrabLive->setIcon(icon);
     }
 
