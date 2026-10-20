@@ -1,4 +1,4 @@
-## Unreleased
+## v0.2.2 (2026-10-20)
 
 - Use the neutral LMI artwork for the package icon.
 
