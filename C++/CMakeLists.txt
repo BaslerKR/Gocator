@@ -348,7 +348,7 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
         endif()
         playground_sdk_package_plugin(GocatorPlugin
             PACKAGE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/Package.cmake"
-            ICON "${PlaygroundPluginSDK_ICON_DIR}/lmi.png")
+            ICON "${PlaygroundPluginSDK_ICON_DIR}/lmi-48.png")
     endif()
     message(STATUS "[Gocator] GocatorPlugin enabled.")
 endif()

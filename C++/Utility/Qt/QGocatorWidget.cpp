@@ -178,8 +178,8 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     _toolConnect->setIconSize(QSize(16, 16));
     {
         QIcon icon;
-        icon.addFile(QStringLiteral(":/Resources/Icons/icons8-connect-48.png"), QSize(), QIcon::Normal, QIcon::Off);
-        icon.addFile(QStringLiteral(":/Resources/Icons/icons8-disconnected-48.png"), QSize(), QIcon::Normal, QIcon::On);
+        icon.addFile(QStringLiteral(":/Resources/icon/connect-48.png"), QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(QStringLiteral(":/Resources/icon/disconnected-48.png"), QSize(), QIcon::Normal, QIcon::On);
         _toolConnect->setIcon(icon);
     }
 
