@@ -2,6 +2,7 @@
 #define QGOCATORWIDGET_H
 
 #ifdef GOCATOR_HAS_UI
+#include "GocatorControlUi.h"
 #include <QJsonValue>
 #include <QMap>
 #include <QWidget>
@@ -18,7 +19,7 @@ class QTreeWidget;
 class QLabel;
 class QStatusBar;
 
-class QGocatorWidget : public QWidget
+class QGocatorWidget : public QWidget, protected GocatorControlUi
 {
     Q_OBJECT
 public:
@@ -101,18 +102,10 @@ private:
     Gocator::CallbackId _statusCallbackId = 0;
     bool _shuttingDown = false;
 
-    QComboBox *_ipCombo = nullptr;
-    QToolButton *_toolRefresh = nullptr;
-    QToolButton *_toolConnect = nullptr;
-    QToolButton *_toolGrabOne = nullptr;
-    QToolButton *_toolGrabLive = nullptr;
 
-    QTreeWidget *_featuresWidget = nullptr;
     QMap<QWidget*, FeatureMapping> _widgetToFeatureMap;
     QMap<QString, class QJsonValue> _pendingParams;
 
-    QStatusBar *_statusBar = nullptr;
-    QLabel *_statusLabel = nullptr;
 
     /** Routes operation diagnostics to application logs. */
     void logMessage(const QString& msg, bool isError = false);

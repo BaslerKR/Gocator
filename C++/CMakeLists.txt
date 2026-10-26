@@ -163,6 +163,7 @@ target_link_libraries(gocator_core
 if(GOCATOR_BUILD_QT_UI)
     find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
 
+    add_subdirectory(Utility/Qt)
     add_library(GocatorQtWidget STATIC
         Utility/Qt/QGocatorWidget.cpp
         Utility/Qt/QGocatorWidget.h
@@ -361,3 +362,7 @@ foreach(module_test IN ITEMS QGocatorWidgetTests GocatorGraphicsFrameAdapterTest
             $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
     endif()
 endforeach()
+
+if(TARGET GocatorQtWidget)
+    target_link_libraries(GocatorQtWidget PUBLIC GocatorPresentation)
+endif()

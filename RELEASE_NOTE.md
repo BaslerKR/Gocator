@@ -11,6 +11,10 @@
 - Document explicit Release-only installed SDK configuration.
 - Build the standalone device plugin against an installed consumer SDK and stage its module-owned runtime package.
 
+## Unreleased
+
+- Share the SDK-independent Qt control composition between the runtime widget and isolated presentation consumers.
+
 ## v0.2.0 (2026-10-08)
 
 - Report acquisition lifecycle to consumers and retain opt-in stopped-device feature snapshots at the current selector state; expose parameter requests and operation outcomes through diagnostics without changing capture policy.
