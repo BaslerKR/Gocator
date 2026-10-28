@@ -3,12 +3,15 @@
 
 
 void GocatorControlUi::create(QWidget* owner) {
+    owner->setProperty("actionDensity", "compact");
+    owner->setProperty("controlRole", "devicePanel");
 
     owner->setWindowTitle(QStringLiteral("LMI Gocator Control"));
     owner->setMinimumSize(300, 350);
 
     auto *mainLayout = new QVBoxLayout(owner);
     mainLayout->setObjectName(QStringLiteral("DeviceRootLayout"));
+    mainLayout->setProperty("layoutRole", "flush");
 
     // IP selection & Control tools (Same layout style as QCameraWidget)
     _ipCombo = new QComboBox(owner);
@@ -57,17 +60,20 @@ void GocatorControlUi::create(QWidget* owner) {
 
     auto *ipLayout = new QHBoxLayout;
     ipLayout->setObjectName(QStringLiteral("DeviceSelectorLayout"));
+    ipLayout->setProperty("layoutRole", "row");
     ipLayout->addWidget(_ipCombo);
     ipLayout->addWidget(_toolRefresh);
 
     auto *toolLayout = new QHBoxLayout;
     toolLayout->setObjectName(QStringLiteral("DeviceToolLayout"));
+    toolLayout->setProperty("layoutRole", "actions");
     toolLayout->addWidget(_toolConnect);
     toolLayout->addWidget(_toolGrabOne);
     toolLayout->addWidget(_toolGrabLive);
 
     auto *topBarLayout = new QHBoxLayout;
     topBarLayout->setObjectName(QStringLiteral("DeviceTopBarLayout"));
+    topBarLayout->setProperty("layoutRole", "content");
     topBarLayout->addLayout(ipLayout);
     topBarLayout->addLayout(toolLayout);
 
@@ -79,6 +85,7 @@ void GocatorControlUi::create(QWidget* owner) {
 
     auto *treeLayout = new QVBoxLayout;
     treeLayout->setObjectName(QStringLiteral("DeviceTreePanelLayout"));
+    treeLayout->setProperty("layoutRole", "bottom-panel");
     treeLayout->addWidget(_featuresWidget);
 
     mainLayout->addLayout(topBarLayout);
