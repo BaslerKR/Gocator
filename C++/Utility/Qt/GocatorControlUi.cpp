@@ -54,10 +54,13 @@ void GocatorControlUi::create(QWidget* owner) {
     _toolGrabLive->setIconSize(QSize(16, 16));
     {
         QIcon icon;
-        // Paused while stopped, live while grabbing.
-        icon.addFile(QStringLiteral(":/Resources/icon/pause-48.png"), QSize(), QIcon::Normal, QIcon::Off);
-        icon.addFile(QStringLiteral(":/Resources/icon/cameras-48.png"), QSize(), QIcon::Normal, QIcon::On);
+        // Always show the next acquisition command, including during hover.
+        icon.addFile(QStringLiteral(":/Resources/icon/cameras-48.png"), QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(QStringLiteral(":/Resources/icon/stop-48.png"), QSize(), QIcon::Normal, QIcon::On);
+        _toolGrabLive->setProperty("iconStateRole", "action");
         _toolGrabLive->setIcon(icon);
+        QObject::connect(_toolGrabLive, &QToolButton::toggled, owner, [this] { updateLiveAction(); });
+        updateLiveAction();
     }
 
     auto *ipLayout = new QHBoxLayout;
@@ -106,4 +109,13 @@ void GocatorControlUi::create(QWidget* owner) {
     mainLayout->addWidget(_statusBar);
 
 
+}
+
+void GocatorControlUi::updateLiveAction()
+{
+    const QString command = _toolGrabLive->isChecked()
+        ? QCoreApplication::translate("QGocatorWidget", "Stop live acquisition")
+        : QCoreApplication::translate("QGocatorWidget", "Start live acquisition");
+    _toolGrabLive->setToolTip(command);
+    _toolGrabLive->setAccessibleName(command);
 }

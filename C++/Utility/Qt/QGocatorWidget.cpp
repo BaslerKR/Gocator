@@ -367,7 +367,7 @@ void QGocatorWidget::handleStatusChanged(Gocator::Status status, bool on)
         if (!on && gocatorDiagnosticLog().isDebugEnabled()) updateFeatureValues();
 
         QSignalBlocker blocker(_toolGrabLive);
-        _toolGrabLive->setChecked(on);
+        _toolGrabLive->setChecked(on); updateLiveAction();
     }
     else if (status == Gocator::ConnectionStatus)
     {
@@ -445,7 +445,7 @@ void QGocatorWidget::applyConnectionState(bool opened)
     {
         {
             QSignalBlocker blocker(_toolGrabLive);
-            _toolGrabLive->setChecked(false);
+            _toolGrabLive->setChecked(false); updateLiveAction();
         }
         updateGrabState(false);
         setRunningState(false);
