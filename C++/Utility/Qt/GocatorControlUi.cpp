@@ -33,8 +33,9 @@ void GocatorControlUi::create(QWidget* owner) {
     _toolConnect->setIconSize(QSize(16, 16));
     {
         QIcon icon;
-        icon.addFile(QStringLiteral(":/Resources/icon/connect-48.png"), QSize(), QIcon::Normal, QIcon::Off);
-        icon.addFile(QStringLiteral(":/Resources/icon/disconnected-48.png"), QSize(), QIcon::Normal, QIcon::On);
+        // The glyph names the current state; the shared theme previews the other state on hover.
+        icon.addFile(QStringLiteral(":/Resources/icon/disconnected-48.png"), QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(QStringLiteral(":/Resources/icon/connect-48.png"), QSize(), QIcon::Normal, QIcon::On);
         _toolConnect->setIcon(icon);
     }
 
@@ -53,8 +54,9 @@ void GocatorControlUi::create(QWidget* owner) {
     _toolGrabLive->setIconSize(QSize(16, 16));
     {
         QIcon icon;
-        icon.addFile(QStringLiteral(":/Resources/icon/cameras-48.png"), QSize(), QIcon::Normal, QIcon::Off);
-        icon.addFile(QStringLiteral(":/Resources/icon/pause-48.png"), QSize(), QIcon::Normal, QIcon::On);
+        // Paused while stopped, live while grabbing.
+        icon.addFile(QStringLiteral(":/Resources/icon/pause-48.png"), QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(QStringLiteral(":/Resources/icon/cameras-48.png"), QSize(), QIcon::Normal, QIcon::On);
         _toolGrabLive->setIcon(icon);
     }
 
