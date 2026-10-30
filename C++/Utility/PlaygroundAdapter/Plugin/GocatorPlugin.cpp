@@ -156,7 +156,7 @@ class GocatorPlugin final : public DevicePluginTemplate {
 public:
     DevicePluginDescriptor descriptor() const override
     {
-        return {QStringLiteral("gocator"), QStringLiteral("LMI Gocator"), playgroundDevicePluginVersion(), true};
+        return {QStringLiteral("gocator"), playgroundDevicePluginDisplayName(), playgroundDevicePluginVersion(), true};
     }
     bool discoverDevices(QVariantMap* discoveryData, QString* errorMessage) override
     {
