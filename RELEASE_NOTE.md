@@ -13,6 +13,7 @@
 
 ## Unreleased
 
+- Build against Plugin SDK 0.2, which adds the standard device connection interface. Gocator does not implement it yet, so Playground reports its connection as unsupported.
 - Take the binary display name from the package definition (`Gocator`).
 
 ## v0.2.2 (2026-10-29)
