@@ -601,12 +601,14 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices()
     }
     catch (const std::exception& e)
     {
+        const std::string message = e.what();
         // A missing camera is a normal discovery outcome, not a warning.
-        syslog("Discovery failed: " + std::string(e.what()), false);
+        const bool noDevices = message.find("Failed in discovering instances") != std::string::npos;
+        syslog("Discovery failed: " + message, !noDevices);
     }
     catch (...)
     {
-        syslog("Discovery failed with unknown error", false);
+        syslog("Discovery failed with unknown error", true);
     }
     return result;
 }
