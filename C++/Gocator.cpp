@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "Internal/GocatorConnection.h"
+#include "GocatorDiscoveryDiagnostics.h"
 #include "GrabCallbackState.h"
 #include "Internal/GocatorDiscovery.h"
 #include "Internal/GocatorResourceClient.h"
@@ -576,17 +577,41 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices()
     try
     {
         gocator::GocatorDiscovery discovery;
-        
-        // Try standard discovery first
+        std::vector<gocator::GocatorDeviceInfo> devices;
+
+        // Try standard discovery first. The SDK throws for an empty result, so
+        // treat only that message as no devices and let classic discovery run.
         syslog("Starting Gocator discovery: mode=standard timeoutMs=3000.");
-        std::vector<gocator::GocatorDeviceInfo> devices = discovery.discover({3000, false});
+        try
+        {
+            devices = discovery.discover({3000, false});
+        }
+        catch (const std::exception& e)
+        {
+            if (!gocator::discoveryMeansNoDevices(e.what()))
+            {
+                throw;
+            }
+            devices.clear();
+        }
         syslog("Gocator standard discovery found " + std::to_string(devices.size()) + " device(s).");
-        
+
         // If nothing found, try classic discovery for older G2/G3 sensors
         if (devices.empty())
         {
             syslog("Starting Gocator discovery: mode=classic timeoutMs=2000.");
-            devices = discovery.discover({2000, true});
+            try
+            {
+                devices = discovery.discover({2000, true});
+            }
+            catch (const std::exception& e)
+            {
+                if (!gocator::discoveryMeansNoDevices(e.what()))
+                {
+                    throw;
+                }
+                devices.clear();
+            }
             syslog("Gocator classic discovery found " + std::to_string(devices.size()) + " device(s).");
         }
 
@@ -601,10 +626,7 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices()
     }
     catch (const std::exception& e)
     {
-        const std::string message = e.what();
-        // A missing camera is a normal discovery outcome, not a warning.
-        const bool noDevices = message.find("Failed in discovering instances") != std::string::npos;
-        syslog("Discovery failed: " + message, !noDevices);
+        syslog("Discovery failed: " + std::string(e.what()), true);
     }
     catch (...)
     {

@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QLineEdit>
 
+#include "GocatorDiscoveryDiagnostics.h"
 #include "GrabCallbackState.h"
 #include "Utility/Qt/QGocatorWidget.h"
 
@@ -17,6 +18,7 @@ private slots:
     void diagnosticsBubblesStartHidden();
     void diagnosticsBubblesFollowLiveAndFailureState();
     void grabCallbackStateCountsOnlyDeliveredFrames();
+    void discoveryMessageClassifiesNoDevices();
 };
 
 namespace
@@ -142,6 +144,14 @@ void QGocatorWidgetTests::grabCallbackStateCountsOnlyDeliveredFrames()
     state.reset();
     QCOMPARE(state.deliveredFrames(), std::uint64_t{0});
     QCOMPARE(state.failedCallbacks(), std::uint64_t{0});
+}
+
+void QGocatorWidgetTests::discoveryMessageClassifiesNoDevices()
+{
+    QVERIFY(gocator::discoveryMeansNoDevices("Failed in discovering instances"));
+    QVERIFY(gocator::discoveryMeansNoDevices("Discovery failed: Failed in discovering instances."));
+    QVERIFY(!gocator::discoveryMeansNoDevices("Failed to connect to the device"));
+    QVERIFY(!gocator::discoveryMeansNoDevices(""));
 }
 
 QTEST_MAIN(QGocatorWidgetTests)
