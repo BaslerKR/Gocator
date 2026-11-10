@@ -67,3 +67,10 @@ void GocatorSourceController::deregisterCallbacks() {
         _statusCallbackId = 0;
     }
 }
+
+std::optional<SourceRuntimeDiagnostics> GocatorSourceController::sourceRuntimeDiagnostics(unsigned sourceIndex) const
+{
+    if (sourceIndex != 0 || !_gocator) return std::nullopt;
+    const auto value = _gocator->runtimeDiagnostics();
+    return SourceRuntimeDiagnostics{value.grabbing, value.delivered, value.failed};
+}

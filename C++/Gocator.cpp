@@ -156,6 +156,7 @@ struct Gocator::Impl
     size_t frameSeq = 0;
     size_t frameTarget = 0;
     GrabCallbackState callbackState;
+    std::mutex dataMutex;
     std::function<void(const GoPxLSdk::GoDataSet&)> dataCallback;
     std::mutex stopWorkerMutex;
     std::thread stopWorker;
@@ -416,13 +417,18 @@ struct Gocator::Impl
             gdpClient.reset();
         }
 
+        // Close has stopped reception; serialize with the last admitted callback.
+        std::lock_guard<std::mutex> dataLock(dataMutex);
         dataCallback = {};
+        Gocator::syslog("Gocator diagnostics: delivered=" + std::to_string(callbackState.deliveredFrames())
+            + " failed=" + std::to_string(callbackState.failedCallbacks()) + ".");
         notifyStatus(GrabbingStatus, false);
         Gocator::syslog("Gocator grabbing stopped.");
     }
 
     void handleData(const GoPxLSdk::GoDataSet& dataSet)
     {
+        std::lock_guard<std::mutex> dataLock(dataMutex);
         if (!isGrabbing.load()) return;
 
         callbackState.beginFrame();
