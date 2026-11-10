@@ -425,6 +425,7 @@ struct Gocator::Impl
     {
         if (!isGrabbing.load()) return;
 
+        bool delivered = false;
         {
             std::vector<GrabCallback> callbacks;
             {
@@ -442,6 +443,7 @@ struct Gocator::Impl
                 try
                 {
                     cb(dataSet, frameSeq);
+                    delivered = true;
                 }
                 catch (const std::exception& e)
                 {
@@ -456,7 +458,10 @@ struct Gocator::Impl
             }
         }
 
-        deliveredFrames.fetch_add(1, std::memory_order_relaxed);
+        if (delivered)
+        {
+            deliveredFrames.fetch_add(1, std::memory_order_relaxed);
+        }
         frameSeq++;
         if (frameTarget > 0 && frameSeq >= frameTarget)
         {

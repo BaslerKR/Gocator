@@ -14,6 +14,7 @@ private slots:
     void selectedDeviceUsesDiscoveredAddress();
     void editedAddressOverridesSelectedDevice();
     void diagnosticsBubblesStartHidden();
+    void diagnosticsBubblesFollowLiveAndFailureState();
 };
 
 namespace
@@ -66,6 +67,51 @@ void QGocatorWidgetTests::diagnosticsBubblesStartHidden()
     QVERIFY(fps);
     QVERIFY(failed->isHidden());
     QVERIFY(fps->isHidden());
+}
+
+namespace
+{
+class DiagnosticsWidget final : public QGocatorWidget
+{
+public:
+    using QGocatorWidget::QGocatorWidget;
+    QLabel* failedBubble() const { return _failedLabel; }
+    QLabel* fpsBubble() const { return _fpsLabel; }
+    void setFakeDiagnostics(const GocatorRuntimeDiagnostics& diagnostics) { _fake = diagnostics; }
+    void setGrabbing(bool grabbing) { updateGrabState(grabbing); }
+    void refreshDiagnostics() { updateDiagnostics(); }
+
+protected:
+    GocatorRuntimeDiagnostics runtimeDiagnostics() const override { return _fake; }
+
+private:
+    GocatorRuntimeDiagnostics _fake;
+};
+}
+
+void QGocatorWidgetTests::diagnosticsBubblesFollowLiveAndFailureState()
+{
+    DiagnosticsWidget widget;
+    widget.setGrabbing(true);
+    widget.setFakeDiagnostics({true, 0, 0});
+    widget.refreshDiagnostics();
+    QVERIFY(!widget.fpsBubble()->isHidden());
+    QVERIFY(widget.failedBubble()->isHidden());
+
+    widget.setFakeDiagnostics({true, 8, 2});
+    widget.refreshDiagnostics();
+    QVERIFY(!widget.fpsBubble()->isHidden());
+    QVERIFY(!widget.failedBubble()->isHidden());
+    QCOMPARE(widget.failedBubble()->property("failedState").toString(),
+             QStringLiteral("warning"));
+
+    widget.setFakeDiagnostics({true, 16, 0});
+    widget.refreshDiagnostics();
+    QVERIFY(widget.failedBubble()->isHidden());
+
+    widget.setGrabbing(false);
+    QVERIFY(widget.fpsBubble()->isHidden());
+    QVERIFY(widget.failedBubble()->isHidden());
 }
 
 QTEST_MAIN(QGocatorWidgetTests)

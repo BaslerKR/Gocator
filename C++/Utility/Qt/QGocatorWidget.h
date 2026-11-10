@@ -61,6 +61,14 @@ private slots:
     void handleStatusChanged(Gocator::Status status, bool on);
     void onParameterChanged();
 
+protected:
+    /** @brief Returns the live producer counters; tests may override with a fake source. */
+    [[nodiscard]] virtual GocatorRuntimeDiagnostics runtimeDiagnostics() const;
+    /** @brief Samples the counters and refreshes the telemetry bubbles. */
+    void updateDiagnostics();
+    /** @brief Applies the observed grabbing state and updates the statusbar. */
+    void updateGrabState(bool grabbing);
+
 private:
     struct FeatureMapping {
         Gocator::ParameterTarget target;
@@ -113,9 +121,7 @@ private:
 
     /** Routes operation diagnostics to application logs. */
     void logMessage(const QString& msg, bool isError = false);
-    void updateGrabState(bool grabbing);
     void updateStatusLabel();
-    void updateDiagnostics();
     void setDiagnosticsVisible(bool visible);
 
     QFutureWatcher<bool> _connectWatcher;

@@ -508,11 +508,16 @@ void QGocatorWidget::setDiagnosticsVisible(const bool visible)
     }
 }
 
+GocatorRuntimeDiagnostics QGocatorWidget::runtimeDiagnostics() const
+{
+    return _gocator ? _gocator->runtimeDiagnostics() : GocatorRuntimeDiagnostics{};
+}
+
 void QGocatorWidget::updateDiagnostics()
 {
-    if (!_gocator || _shuttingDown || !_grabbing) return;
+    if (_shuttingDown || !_grabbing) return;
     const auto now = std::chrono::steady_clock::now();
-    const auto diagnostics = _gocator->runtimeDiagnostics();
+    const auto diagnostics = runtimeDiagnostics();
     double fps = 0.0;
     if (_hasDiagnosticsSample) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -546,9 +551,12 @@ void QGocatorWidget::updateDiagnostics()
 
     const qint64 elapsed = _diagnosticsClock.elapsed();
     if (elapsed - _lastDiagnosticsLogMs >= 5000) {
+        const QString camera = _gocator
+            ? QString::fromStdString(_gocator->getConnectedAddress())
+            : QStringLiteral("camera");
         qInfo().noquote() << QStringLiteral(
             "[Gocator UI] diagnostics: camera=%1 live=%2 failed=%3 fps=%4")
-            .arg(QString::fromStdString(_gocator->getConnectedAddress()))
+            .arg(camera)
             .arg(diagnostics.grabbing ? QStringLiteral("true") : QStringLiteral("false"))
             .arg(static_cast<qulonglong>(diagnostics.failed))
             .arg(fps, 0, 'f', 1);
