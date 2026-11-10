@@ -153,6 +153,8 @@ struct Gocator::Impl
 
     size_t frameSeq = 0;
     size_t frameTarget = 0;
+    std::atomic<std::uint64_t> deliveredFrames{0};
+    std::atomic<std::uint64_t> failedFrames{0};
     std::function<void(const GoPxLSdk::GoDataSet&)> dataCallback;
     std::mutex stopWorkerMutex;
     std::thread stopWorker;
@@ -374,6 +376,8 @@ struct Gocator::Impl
 
             frameSeq = 0;
             frameTarget = frames;
+            deliveredFrames.store(0, std::memory_order_relaxed);
+            failedFrames.store(0, std::memory_order_relaxed);
             stopRequested.store(false);
             isGrabbing.store(true);
 
@@ -441,15 +445,18 @@ struct Gocator::Impl
                 }
                 catch (const std::exception& e)
                 {
+                    failedFrames.fetch_add(1, std::memory_order_relaxed);
                     Gocator::syslog("Gocator grab callback failed: " + std::string(e.what()), true);
                 }
                 catch (...)
                 {
+                    failedFrames.fetch_add(1, std::memory_order_relaxed);
                     Gocator::syslog("Gocator grab callback failed with an unknown exception.", true);
                 }
             }
         }
 
+        deliveredFrames.fetch_add(1, std::memory_order_relaxed);
         frameSeq++;
         if (frameTarget > 0 && frameSeq >= frameTarget)
         {
@@ -646,6 +653,13 @@ void Gocator::stop()
 bool Gocator::isGrabbing() const
 {
     return _impl->isGrabbing.load();
+}
+
+GocatorRuntimeDiagnostics Gocator::runtimeDiagnostics() const noexcept
+{
+    return {_impl->isGrabbing.load(std::memory_order_acquire),
+        _impl->deliveredFrames.load(std::memory_order_acquire),
+        _impl->failedFrames.load(std::memory_order_acquire)};
 }
 
 std::string Gocator::getConnectedAddress() const

@@ -13,6 +13,7 @@
 
 ## Unreleased
 
+- Show live producer telemetry in the device statusbar: an `fps` bubble over the delivered-frame delta and a warning `failed` bubble only when a grab callback failed. Counters reset when live acquisition starts, and both bubbles stay hidden while not grabbing.
 - Build against Plugin SDK 0.2, which adds the standard device connection interface. Gocator does not implement it yet, so Playground reports its connection as unsupported.
 - Take the binary display name from the package definition (`Gocator`).
 

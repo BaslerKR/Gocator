@@ -4,12 +4,21 @@
 #include <string>
 #include <memory>
 #include <functional>
+#include <cstdint>
 #include <vector>
 
 namespace GoPxLSdk
 {
 class GoDataSet;
 }
+
+/** @brief Live producer counters for the Gocator device statusbar. */
+struct GocatorRuntimeDiagnostics
+{
+    bool grabbing = false;
+    std::uint64_t delivered = 0;
+    std::uint64_t failed = 0;
+};
 
 class Gocator
 {
@@ -97,6 +106,8 @@ public:
     void grab(size_t frames = 0);
     void stop();
     bool isGrabbing() const;
+    /** @brief Returns live producer counters for the device statusbar. */
+    [[nodiscard]] GocatorRuntimeDiagnostics runtimeDiagnostics() const noexcept;
 
     std::string getConnectedAddress() const;
     DeviceInfo getConnectedDeviceInfo() const;

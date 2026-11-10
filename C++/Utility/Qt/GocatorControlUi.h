@@ -18,4 +18,6 @@ struct GocatorControlUi {
     QTreeWidget* _featuresWidget = nullptr;
     QStatusBar* _statusBar = nullptr;
     QLabel* _statusLabel = nullptr;
+    QLabel* _failedLabel = nullptr;
+    QLabel* _fpsLabel = nullptr;
 };

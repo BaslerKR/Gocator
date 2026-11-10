@@ -22,6 +22,8 @@
 #include <QJsonArray>
 #include <QJsonValue>
 #include <QSignalBlocker>
+#include <QStyle>
+#include <QTimer>
 #include <QDebug>
 #include <QLoggingCategory>
 Q_LOGGING_CATEGORY(gocatorDiagnosticLog, "diagnostics.Gocator", QtInfoMsg)
@@ -153,6 +155,9 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     , _gocator(gocator)
 {
     GocatorControlUi::create(this);
+    _diagnosticsTimer = new QTimer(this);
+    _diagnosticsTimer->setInterval(1000);
+    connect(_diagnosticsTimer, &QTimer::timeout, this, &QGocatorWidget::updateDiagnostics);
     // Connections
     connect(_toolRefresh, &QToolButton::clicked, this, &QGocatorWidget::onRefreshClicked);
     connect(_toolConnect, &QToolButton::toggled, this, &QGocatorWidget::onConnectToggled);
@@ -230,6 +235,7 @@ QGocatorWidget::~QGocatorWidget()
 void QGocatorWidget::prepareForShutdown()
 {
     _shuttingDown = true;
+    if (_diagnosticsTimer) _diagnosticsTimer->stop();
     _connectWatcher.cancel();
     _connectWatcher.waitForFinished();
     _discoverWatcher.cancel();
@@ -467,8 +473,87 @@ void QGocatorWidget::logMessage(const QString& message, bool error)
 
 void QGocatorWidget::updateGrabState(bool grabbing)
 {
+    const bool wasGrabbing = _grabbing;
     _grabbing = grabbing;
+    if (grabbing && !wasGrabbing) {
+        _lastDelivered = 0;
+        _hasDiagnosticsSample = false;
+        _lastDiagnosticsLogMs = 0;
+        _diagnosticsClock.start();
+        setDiagnosticsVisible(true);
+        _diagnosticsTimer->start();
+    } else if (!grabbing && wasGrabbing) {
+        _diagnosticsTimer->stop();
+        _hasDiagnosticsSample = false;
+        setDiagnosticsVisible(false);
+    }
     updateStatusLabel();
+}
+
+void QGocatorWidget::setDiagnosticsVisible(const bool visible)
+{
+    if (visible) {
+        if (_failedLabel) {
+            _failedLabel->hide();
+            _failedLabel->setText(QStringLiteral("0 failed"));
+            _failedLabel->setProperty("failedState", QStringLiteral("normal"));
+        }
+        if (_fpsLabel) {
+            _fpsLabel->setText(QStringLiteral("0.0 fps"));
+            _fpsLabel->show();
+        }
+    } else {
+        if (_failedLabel) _failedLabel->hide();
+        if (_fpsLabel) _fpsLabel->hide();
+    }
+}
+
+void QGocatorWidget::updateDiagnostics()
+{
+    if (!_gocator || _shuttingDown || !_grabbing) return;
+    const auto now = std::chrono::steady_clock::now();
+    const auto diagnostics = _gocator->runtimeDiagnostics();
+    double fps = 0.0;
+    if (_hasDiagnosticsSample) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            now - _diagnosticsSample).count();
+        if (elapsed > 0 && diagnostics.delivered >= _lastDelivered) {
+            fps = static_cast<double>(diagnostics.delivered - _lastDelivered)
+                * 1.0e9 / static_cast<double>(elapsed);
+        }
+    }
+    _lastDelivered = diagnostics.delivered;
+    _diagnosticsSample = now;
+    _hasDiagnosticsSample = true;
+
+    if (_failedLabel) {
+        const bool showFailed = diagnostics.failed > 0;
+        if (showFailed) {
+            _failedLabel->setText(QStringLiteral("%1 failed").arg(
+                static_cast<qulonglong>(diagnostics.failed)));
+            if (_failedLabel->property("failedState").toString()
+                != QStringLiteral("warning")) {
+                _failedLabel->setProperty("failedState", QStringLiteral("warning"));
+                _failedLabel->style()->unpolish(_failedLabel);
+                _failedLabel->style()->polish(_failedLabel);
+            }
+        }
+        _failedLabel->setVisible(showFailed);
+    }
+    if (_fpsLabel) {
+        _fpsLabel->setText(QStringLiteral("%1 fps").arg(fps, 0, 'f', 1));
+    }
+
+    const qint64 elapsed = _diagnosticsClock.elapsed();
+    if (elapsed - _lastDiagnosticsLogMs >= 5000) {
+        qInfo().noquote() << QStringLiteral(
+            "[Gocator UI] diagnostics: camera=%1 live=%2 failed=%3 fps=%4")
+            .arg(QString::fromStdString(_gocator->getConnectedAddress()))
+            .arg(diagnostics.grabbing ? QStringLiteral("true") : QStringLiteral("false"))
+            .arg(static_cast<qulonglong>(diagnostics.failed))
+            .arg(fps, 0, 'f', 1);
+        _lastDiagnosticsLogMs = elapsed;
+    }
 }
 
 void QGocatorWidget::updateStatusLabel()

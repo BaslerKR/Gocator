@@ -106,6 +106,20 @@ void GocatorControlUi::create(QWidget* owner) {
     _statusLabel->setAlignment(Qt::AlignCenter);
     _statusBar->addWidget(_statusLabel);
 
+    _failedLabel = new QLabel(owner);
+    _failedLabel->setObjectName(QStringLiteral("GocatorStatusFailed"));
+    _failedLabel->setProperty("statusRole", QStringLiteral("deviceFailed"));
+    _failedLabel->setAlignment(Qt::AlignCenter);
+    _failedLabel->hide();
+    _statusBar->addPermanentWidget(_failedLabel);
+
+    _fpsLabel = new QLabel(owner);
+    _fpsLabel->setObjectName(QStringLiteral("GocatorStatusFps"));
+    _fpsLabel->setProperty("statusRole", QStringLiteral("deviceFps"));
+    _fpsLabel->setAlignment(Qt::AlignCenter);
+    _fpsLabel->hide();
+    _statusBar->addPermanentWidget(_fpsLabel);
+
     mainLayout->addWidget(_statusBar);
 
 

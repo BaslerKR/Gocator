@@ -1,6 +1,7 @@
 #include <QtTest/QtTest>
 
 #include <QComboBox>
+#include <QLabel>
 #include <QLineEdit>
 
 #include "Utility/Qt/QGocatorWidget.h"
@@ -12,6 +13,7 @@ class QGocatorWidgetTests : public QObject
 private slots:
     void selectedDeviceUsesDiscoveredAddress();
     void editedAddressOverridesSelectedDevice();
+    void diagnosticsBubblesStartHidden();
 };
 
 namespace
@@ -53,6 +55,17 @@ void QGocatorWidgetTests::editedAddressOverridesSelectedDevice()
 
     QCOMPARE(combo->currentData().toString(), QStringLiteral("192.168.1.10"));
     QCOMPARE(widget.ipAddress(), QStringLiteral("10.20.30.40"));
+}
+
+void QGocatorWidgetTests::diagnosticsBubblesStartHidden()
+{
+    QGocatorWidget widget;
+    auto* failed = widget.findChild<QLabel*>(QStringLiteral("GocatorStatusFailed"));
+    auto* fps = widget.findChild<QLabel*>(QStringLiteral("GocatorStatusFps"));
+    QVERIFY(failed);
+    QVERIFY(fps);
+    QVERIFY(failed->isHidden());
+    QVERIFY(fps->isHidden());
 }
 
 QTEST_MAIN(QGocatorWidgetTests)

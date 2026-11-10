@@ -3,11 +3,14 @@
 
 #ifdef GOCATOR_HAS_UI
 #include "GocatorControlUi.h"
+#include <QElapsedTimer>
 #include <QJsonValue>
 #include <QMap>
 #include <QWidget>
 #include <QString>
 #include <QFutureWatcher>
+#include <chrono>
+#include <cstdint>
 #include "Gocator.h"
 
 class QComboBox;
@@ -18,6 +21,7 @@ class QToolButton;
 class QTreeWidget;
 class QLabel;
 class QStatusBar;
+class QTimer;
 
 class QGocatorWidget : public QWidget, protected GocatorControlUi
 {
@@ -111,11 +115,19 @@ private:
     void logMessage(const QString& msg, bool isError = false);
     void updateGrabState(bool grabbing);
     void updateStatusLabel();
+    void updateDiagnostics();
+    void setDiagnosticsVisible(bool visible);
 
     QFutureWatcher<bool> _connectWatcher;
     QFutureWatcher<std::vector<Gocator::DeviceInfo>> _discoverWatcher;
     QFutureWatcher<void> _paramWatcher;
     QFutureWatcher<FeatureDataResult> _featureDataWatcher;
+    QTimer* _diagnosticsTimer = nullptr;
+    QElapsedTimer _diagnosticsClock;
+    std::chrono::steady_clock::time_point _diagnosticsSample{};
+    bool _hasDiagnosticsSample = false;
+    std::uint64_t _lastDelivered = 0;
+    qint64 _lastDiagnosticsLogMs = 0;
     bool _updatingFeatures = false;
     bool _grabbing = false;
     bool _parameterUpdateActive = false;
