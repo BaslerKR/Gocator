@@ -42,11 +42,15 @@ constexpr const char* EXPOSURE_PARAMETER_PATH = "/parameters/exposureSettings/si
 
 [[nodiscard]] Gocator::ParameterTarget parameterTargetFromString(const std::string& type)
 {
-    return (type == "scanner") ? Gocator::ParameterTarget::Scanner : Gocator::ParameterTarget::Sensor;
+    if (type == "system") return Gocator::ParameterTarget::System;
+    if (type == "scanner") return Gocator::ParameterTarget::Scanner;
+    if (type == "sensor") return Gocator::ParameterTarget::Sensor;
+    throw std::invalid_argument("Unknown Gocator parameter target: " + type);
 }
 
 [[nodiscard]] const char* parameterTargetName(Gocator::ParameterTarget target)
 {
+    if (target == Gocator::ParameterTarget::System) return "system";
     return target == Gocator::ParameterTarget::Scanner ? "scanner" : "sensor";
 }
 
@@ -120,6 +124,8 @@ constexpr const char* EXPOSURE_PARAMETER_PATH = "/parameters/exposureSettings/si
 
 struct Gocator::Impl
 {
+    mutable std::recursive_mutex controlMutex;
+    std::uint64_t connectionGeneration = 0;
     std::string ipAddress;
     std::unique_ptr<gocator::GocatorConnection> connection;
     std::unique_ptr<gocator::GocatorResourceClient> resources;
@@ -200,6 +206,7 @@ struct Gocator::Impl
 
     bool open(const std::string& ip)
     {
+        std::lock_guard<std::recursive_mutex> lock(controlMutex);
         if (isOpened.load())
         {
             Gocator::syslog("Open skipped: Gocator is already connected to " + ipAddress + ".");
@@ -218,6 +225,7 @@ struct Gocator::Impl
             connection->connect();
 
             ipAddress = connection->config().address;
+            ++connectionGeneration;
             isOpened.store(true);
             Gocator::syslog("Gocator connected: address=" + ipAddress
                 + " gdpPort=" + std::to_string(connection->gdpPort()) + ".");
@@ -249,6 +257,7 @@ struct Gocator::Impl
             gdpClient.reset();
         }
 
+        std::lock_guard<std::recursive_mutex> controlLock(controlMutex);
         resources.reset();
         if (connection)
         {
@@ -643,32 +652,38 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices()
 
 void Gocator::configure(double scanLengthMm, ScanMode mode, bool intensityEnabled, bool uniformSpacingEnabled, int exposureUs)
 {
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     _impl->configure(scanLengthMm, mode, intensityEnabled, uniformSpacingEnabled, exposureUs);
 }
 
 void Gocator::setScanLengthMm(double length)
 {
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     _impl->setParameterValue(ParameterTarget::Scanner, SCAN_LENGTH_PARAMETER_PATH, std::to_string(length));
 }
 
 void Gocator::setScanMode(ScanMode mode)
 {
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     const int value = (mode == ScanMode::SurfaceMode) ? 3 : 2;
     _impl->setParameterValue(ParameterTarget::Scanner, SCAN_MODE_PARAMETER_PATH, std::to_string(value));
 }
 
 void Gocator::setExposureUs(int exposure)
 {
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     _impl->setParameterValue(ParameterTarget::Sensor, EXPOSURE_PARAMETER_PATH, std::to_string(exposure));
 }
 
 void Gocator::setIntensityEnabled(bool enable)
 {
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     _impl->setParameterValue(ParameterTarget::Scanner, INTENSITY_PARAMETER_PATH, enable ? "true" : "false");
 }
 
 void Gocator::setUniformSpacingEnabled(bool enable)
 {
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     _impl->setParameterValue(ParameterTarget::Scanner, UNIFORM_SPACING_PARAMETER_PATH, enable ? "true" : "false");
 }
 
@@ -696,11 +711,13 @@ GocatorRuntimeDiagnostics Gocator::runtimeDiagnostics() const noexcept
 
 std::string Gocator::getConnectedAddress() const
 {
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     return _impl->ipAddress;
 }
 
 Gocator::DeviceInfo Gocator::getConnectedDeviceInfo() const
 {
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     DeviceInfo info;
     if (!_impl || !_impl->isOpened.load()) return info;
     info.address = _impl->ipAddress;
@@ -740,8 +757,48 @@ Gocator::DeviceInfo Gocator::getConnectedDeviceInfo() const
     return info;
 }
 
+Gocator::SystemState Gocator::systemState() const
+{
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
+    if (!_impl->isOpened.load() || !_impl->connection)
+        throw std::logic_error("Gocator is disconnected.");
+    auto& system = _impl->connection->system();
+    SystemState state;
+    state.connectionGeneration = _impl->connectionGeneration;
+    switch (system.RunningState()) {
+    case GoPxLSdk::GoSystem::State::Ready: state.running = SystemState::Running::Ready; break;
+    case GoPxLSdk::GoSystem::State::Running: state.running = SystemState::Running::Running; break;
+    case GoPxLSdk::GoSystem::State::Conflict: state.running = SystemState::Running::Conflict; break;
+    default: throw std::runtime_error("The SDK returned an unknown running state.");
+    }
+    state.quickEditEnabled = system.QuickEditEnabled();
+    return state;
+}
+
+void Gocator::setQuickEditEnabled(bool enabled, std::optional<SystemState> expected)
+{
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
+    SystemState current;
+    try { current = systemState(); }
+    catch (const std::logic_error&) { throw; }
+    catch (const std::exception& error) { throw SystemControlError(error.what(), false); }
+    catch (...) { throw SystemControlError("System observation failed before SDK dispatch.", false); }
+    if (expected && (current.connectionGeneration != expected->connectionGeneration
+        || current.running != expected->running || current.quickEditEnabled != expected->quickEditEnabled))
+        throw std::logic_error("Gocator system state changed before the write.");
+    auto& system = _impl->connection->system();
+    try {
+        if (enabled) system.EnableQuickEdit();
+        else system.DisableQuickEdit();
+    } catch (const std::exception& error) { throw SystemControlError(error.what(), true); }
+    catch (...) { throw SystemControlError("Quick Edit SDK completion is unknown.", true); }
+}
+
 std::string Gocator::getParametersSchema(ParameterTarget target) const
 {
+    if (target == ParameterTarget::System)
+        return R"({"type":"object","properties":{"parameters":{"type":"object","properties":{"runningState":{"type":"string","enum":["ready","running","conflict"],"readOnly":true,"title":"Running state"},"quickEditEnabled":{"type":"boolean","title":"Quick edit","description":"Suppresses recalculation of existing scan data while editing configuration."}}}}})";
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     if (!_impl->isOpened.load()) return "{}";
     try
     {
@@ -757,6 +814,14 @@ std::string Gocator::getParametersSchema(ParameterTarget target) const
 
 std::string Gocator::getParametersData(ParameterTarget target) const
 {
+    if (target == ParameterTarget::System) {
+        const auto state = systemState();
+        const char* running = state.running == SystemState::Running::Ready ? "ready"
+            : state.running == SystemState::Running::Running ? "running" : "conflict";
+        return std::string("{\"parameters\":{\"runningState\":\"") + running
+            + "\",\"quickEditEnabled\":" + (state.quickEditEnabled ? "true" : "false") + "}}";
+    }
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     if (!_impl->isOpened.load()) return "{}";
     try
     {
@@ -772,6 +837,13 @@ std::string Gocator::getParametersData(ParameterTarget target) const
 
 void Gocator::setParameterValue(ParameterTarget target, const std::string& path, const std::string& jsonValue)
 {
+    if (target == ParameterTarget::System) {
+        if (path != "/parameters/quickEditEnabled" || (jsonValue != "true" && jsonValue != "false"))
+            throw std::invalid_argument("Only the boolean System quickEditEnabled setting is writable.");
+        setQuickEditEnabled(jsonValue == "true");
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     _impl->setParameterValue(target, path, jsonValue);
 }
 

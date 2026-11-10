@@ -1,21 +1,28 @@
 #include "GocatorSourceController.h"
+#include <QUuid>
 #include "engine/GraphicsFrame.h"
 #include "SessionFrame.h"
 #include "Utility/PlaygroundAdapter/GocatorGraphicsFrameStream.h"
 
 GocatorSourceController::GocatorSourceController(Gocator* gocator, QObject* parent)
     : AbstractSourceController(parent), _gocator(gocator) {
+    _parameterIdentity = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+    _readSystem = [gocator] { return gocator->systemState(); };
+    _writeQuickEdit = [gocator](bool enabled, std::optional<Gocator::SystemState> expected) {
+        gocator->setQuickEditEnabled(enabled, expected);
+    };
+    _systemConnected = [gocator] { return gocator && gocator->isOpened(); };
     registerCallbacks();
 }
 
 GocatorSourceController::~GocatorSourceController() {
+    _parameterWork.waitForFinished();
     stop();
     deregisterCallbacks();
 }
 
 void GocatorSourceController::start() {
     if (_gocator) {
-        _isGrabbing = true;
         _gocator->grab();
     }
 }

@@ -76,16 +76,27 @@ private:
         QString label;
     };
 
+protected:
+    /** @brief Copied resource data applied on the GUI thread, also usable by native fixtures. */
     struct FeatureDataResult {
         QString scannerData;
         QString sensorData;
+        QString systemData;
+        QString scannerSchema;
+        QString sensorSchema;
+        QString systemSchema;
+        QString deviceLabel;
+        bool rebuild = false;
     };
 
+private:
     void setConnectionOperationActive(bool active);
     void applyConnectionState(bool opened);
 
     /** Rebuilds scanner and sensor feature editors from live resource schemas. */
     void populateFeatures();
+    /** @brief Fetches SDK resources on a worker; only copied JSON reaches the GUI. */
+    void fetchFeatureData(bool rebuild);
     void clearFeatures();
     void applyDiscoveredDevices(const std::vector<Gocator::DeviceInfo>& devices);
 
@@ -99,17 +110,24 @@ private:
      * @param propSchema Property schema.
      * @param valuesObj Current values at the property's parent object.
      */
-    void addFeatureNode(class QTreeWidgetItem* parentItem, Gocator::ParameterTarget target, const QString& basePath, const QString& name, const class QJsonObject& propSchema, const class QJsonObject& valuesObj);
+protected:
+    void addFeatureNode(class QTreeWidgetItem* parentItem, Gocator::ParameterTarget target, const QString& basePath, const QString& name, const class QJsonObject& propSchema, const class QJsonObject& valuesObj, bool inheritedReadOnly = false);
+
+private:
 
     /** Refreshes current scanner and sensor values asynchronously. */
     void updateFeatureValues();
 
+protected:
     /** Applies asynchronously fetched values to existing feature editors. */
     void applyFeatureValues(const FeatureDataResult& result);
+    /** @brief Rebuilds the production tree from copied resource schemas and values. */
+    void applyFeatureSnapshot(const FeatureDataResult& result);
 
     /** Enables editable feature controls while preserving schema read-only fields. */
     void setFeatureEditorsEnabled(bool enabled);
 
+private:
     Gocator *_gocator = nullptr;
     Gocator::CallbackId _statusCallbackId = 0;
     bool _shuttingDown = false;

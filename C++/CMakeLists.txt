@@ -312,6 +312,7 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
         Utility/PlaygroundAdapter/Plugin/GocatorPlugin.cpp
         Utility/PlaygroundAdapter/Source/GocatorSourceController.h
         Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
+        Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp
     )
     set_target_properties(GocatorPlugin PROPERTIES
         PREFIX ""
@@ -353,11 +354,31 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
             PACKAGE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/Package.cmake"
             ICON "${PlaygroundPluginSDK_ICON_DIR}/lmi-48.png")
     endif()
+    if(GOCATOR_BUILD_TESTS)
+        add_executable(GocatorParameterControlTests
+            tests/GocatorParameterControlTests.cpp
+            Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
+            Utility/PlaygroundAdapter/Source/GocatorSourceController.h
+            Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp)
+        set_target_properties(GocatorParameterControlTests PROPERTIES AUTOMOC ON)
+        target_link_libraries(GocatorParameterControlTests PRIVATE
+            Playground::DevicePlugin Gocator::QtWidget Gocator::PlaygroundAdapter Qt6::Test Qt6::Concurrent)
+        if(WIN32)
+            add_test(NAME GocatorParameterControlTests COMMAND ${CMAKE_COMMAND} -E env
+                "QT_QPA_PLATFORM=offscreen"
+                "PATH=${GOPXL_SDK_DIR}/lib/${gopxl_platform_dir};$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+                $<TARGET_FILE:GocatorParameterControlTests>)
+        else()
+            add_test(NAME GocatorParameterControlTests COMMAND GocatorParameterControlTests)
+            set_tests_properties(GocatorParameterControlTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        endif()
+    endif()
+
     message(STATUS "[Gocator] GocatorPlugin enabled.")
 endif()
 
 # Keep contract assertions active in Release validation.
-foreach(module_test IN ITEMS QGocatorWidgetTests GocatorGraphicsFrameAdapterTests)
+foreach(module_test IN ITEMS QGocatorWidgetTests GocatorGraphicsFrameAdapterTests GocatorParameterControlTests)
     if(TARGET ${module_test})
         target_compile_options(${module_test} PRIVATE
             $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>

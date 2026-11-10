@@ -6,6 +6,8 @@
 #include <functional>
 #include <cstdint>
 #include <vector>
+#include <optional>
+#include <stdexcept>
 
 namespace GoPxLSdk
 {
@@ -46,9 +48,32 @@ public:
     };
 
     enum class ParameterTarget {
+        System,
         Scanner,
         Sensor
     };
+
+    /** @brief Copies the official GoSystem state without confusing GDP activity with sensor state. */
+    struct SystemState {
+        std::uint64_t connectionGeneration = 0;
+        enum class Running { Ready, Running, Conflict } running = Running::Ready;
+        bool quickEditEnabled = false;
+    };
+
+    /** @brief Distinguishes pre-command observation failure from uncertain SDK mutation. */
+    class SystemControlError : public std::runtime_error {
+    public:
+        SystemControlError(const std::string& message, bool mayHaveApplied)
+            : std::runtime_error(message), mayHaveApplied(mayHaveApplied) {}
+        bool mayHaveApplied;
+    };
+
+    /** @brief Calls GoSystem::RunningState and QuickEditEnabled; throws on disconnection/SDK failure. */
+    SystemState systemState() const;
+    /** @brief Calls EnableQuickEdit/DisableQuickEdit; query systemState() for actual readback.
+     *  @note Optional expected state is checked under the same control lock before effects.
+     */
+    void setQuickEditEnabled(bool enabled, std::optional<SystemState> expected = {});
 
     using StatusCallback = std::function<void(Status status, bool on)>;
     CallbackId registerStatusCallback(StatusCallback cb);

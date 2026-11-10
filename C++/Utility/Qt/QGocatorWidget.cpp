@@ -11,6 +11,7 @@
 #include <QTreeWidget>
 #include <QScrollBar>
 #include <QLabel>
+#include <QLineEdit>
 #include <QStatusBar>
 #include <QPointer>
 #include <QMetaObject>
@@ -31,6 +32,7 @@ Q_LOGGING_CATEGORY(gocatorDiagnosticLog, "diagnostics.Gocator", QtInfoMsg)
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -201,7 +203,9 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
 
     connect(&_featureDataWatcher, &QFutureWatcher<FeatureDataResult>::finished, this, [this]() {
         if (_shuttingDown || !_gocator) return;
-        applyFeatureValues(_featureDataWatcher.result());
+        const auto result = _featureDataWatcher.result();
+        if (result.rebuild) applyFeatureSnapshot(result);
+        else applyFeatureValues(result);
         setConnectionOperationActive(false);
         setRunningState(_grabbing);
     });
@@ -749,29 +753,18 @@ void QGocatorWidget::clearFeatures()
 
 void QGocatorWidget::populateFeatures()
 {
-    if (!_gocator || _shuttingDown || !_gocator->isOpened()) return;
+    fetchFeatureData(true);
+}
 
+void QGocatorWidget::applyFeatureSnapshot(const FeatureDataResult& result)
+{
     _updatingFeatures = true;
     clearFeatures();
-
-    QString scannerSchemaStr = QString::fromStdString(_gocator->getParametersSchema(Gocator::ParameterTarget::Scanner));
-    QString scannerDataStr = QString::fromStdString(_gocator->getParametersData(Gocator::ParameterTarget::Scanner));
-    QString sensorSchemaStr = QString::fromStdString(_gocator->getParametersSchema(Gocator::ParameterTarget::Sensor));
-    QString sensorDataStr = QString::fromStdString(_gocator->getParametersData(Gocator::ParameterTarget::Sensor));
-
-    QJsonObject scannerSchema = QJsonDocument::fromJson(scannerSchemaStr.toUtf8()).object();
-    QJsonObject scannerData = QJsonDocument::fromJson(scannerDataStr.toUtf8()).object();
-    QJsonObject sensorSchema = QJsonDocument::fromJson(sensorSchemaStr.toUtf8()).object();
-    QJsonObject sensorData = QJsonDocument::fromJson(sensorDataStr.toUtf8()).object();
-
-    QString rootText = QString::fromStdString(_gocator->getConnectedAddress());
-    {
-        Gocator::DeviceInfo devInfo = _gocator->getConnectedDeviceInfo();
-        if (!devInfo.address.empty())
-        {
-            rootText = QString::fromStdString(formatDeviceName(devInfo.model, devInfo.serial, devInfo.address, devInfo.isVirtual));
-        }
-    }
+    const QJsonObject scannerSchema = QJsonDocument::fromJson(result.scannerSchema.toUtf8()).object();
+    const QJsonObject scannerData = QJsonDocument::fromJson(result.scannerData.toUtf8()).object();
+    const QJsonObject sensorSchema = QJsonDocument::fromJson(result.sensorSchema.toUtf8()).object();
+    const QJsonObject sensorData = QJsonDocument::fromJson(result.sensorData.toUtf8()).object();
+    const QString rootText = result.deviceLabel;
 
     QTreeWidgetItem* rootItem = new QTreeWidgetItem(_featuresWidget, QStringList() << rootText);
 
@@ -790,7 +783,8 @@ void QGocatorWidget::populateFeatures()
             const QJsonObject parameterProperties = parameterSchema.value(QStringLiteral("properties")).toObject();
             for (auto it = parameterProperties.begin(); it != parameterProperties.end(); ++it)
             {
-                addFeatureNode(category, target, QStringLiteral("/parameters"), it.key(), it.value().toObject(), parameterValues);
+                addFeatureNode(category, target, QStringLiteral("/parameters"), it.key(), it.value().toObject(), parameterValues,
+                    resourceSchema.value(QStringLiteral("readOnly")).toBool() || parameterSchema.value(QStringLiteral("readOnly")).toBool());
             }
 
             // Some GoPxL versions expose motion/alignment beside the
@@ -798,7 +792,7 @@ void QGocatorWidget::populateFeatures()
             for (auto it = resourceProperties.begin(); it != resourceProperties.end(); ++it)
             {
                 if (it.key() == QStringLiteral("parameters")) continue;
-                addFeatureNode(category, target, QString(), it.key(), it.value().toObject(), resourceData);
+                addFeatureNode(category, target, QString(), it.key(), it.value().toObject(), resourceData, resourceSchema.value(QStringLiteral("readOnly")).toBool());
             }
         }
         else
@@ -807,11 +801,16 @@ void QGocatorWidget::populateFeatures()
             // writable values at the resource root.
             for (auto it = resourceProperties.begin(); it != resourceProperties.end(); ++it)
             {
-                addFeatureNode(category, target, QString(), it.key(), it.value().toObject(), resourceData);
+                addFeatureNode(category, target, QString(), it.key(), it.value().toObject(), resourceData, resourceSchema.value(QStringLiteral("readOnly")).toBool());
             }
         }
         category->setExpanded(false);
     };
+
+    if (!result.systemData.isEmpty())
+        addResourceCategory(QStringLiteral("System"), Gocator::ParameterTarget::System,
+            QJsonDocument::fromJson(result.systemSchema.toUtf8()).object(),
+            QJsonDocument::fromJson(result.systemData.toUtf8()).object());
 
     addResourceCategory(QStringLiteral("Scanner"), Gocator::ParameterTarget::Scanner, scannerSchema, scannerData);
     addResourceCategory(QStringLiteral("Sensor"), Gocator::ParameterTarget::Sensor, sensorSchema, sensorData);
@@ -820,10 +819,13 @@ void QGocatorWidget::populateFeatures()
     _updatingFeatures = false;
 }
 
-void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::ParameterTarget target, const QString& basePath, const QString& name, const QJsonObject& propSchema, const QJsonObject& valuesObj)
+void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::ParameterTarget target, const QString& basePath, const QString& name, const QJsonObject& propSchema, const QJsonObject& valuesObj, bool inheritedReadOnly)
 {
     QString propType = propSchema.value(QStringLiteral("type")).toString();
-    QString path = basePath + "/" + name;
+    QString token = name;
+    token.replace(QStringLiteral("~"), QStringLiteral("~0")).replace(QStringLiteral("/"), QStringLiteral("~1"));
+    const QString path = basePath + "/" + token;
+    const bool readOnly = inheritedReadOnly || propSchema.value(QStringLiteral("readOnly")).toBool(false);
     
     // Use 'label' or 'title' for user-friendly name if available, otherwise fallback to the key 'name'
     QString displayName = propSchema.value(QStringLiteral("label")).toString();
@@ -848,7 +850,7 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
         QJsonObject subValues = valuesObj.value(name).toObject();
         for (auto it = subProperties.begin(); it != subProperties.end(); ++it)
         {
-            addFeatureNode(groupItem, target, path, it.key(), it.value().toObject(), subValues);
+            addFeatureNode(groupItem, target, path, it.key(), it.value().toObject(), subValues, readOnly);
         }
         groupItem->setExpanded(false);
     }
@@ -893,9 +895,9 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
                     QString displayText = (i < enumTexts.size()) ? enumTexts.at(i).toString() : QString();
                     if (enumV.isDouble())
                     {
-                        if (displayText.isEmpty()) displayText = QString::number(enumV.toDouble());
-                        combo->addItem(displayText, enumV.toDouble());
-                        if (curVal.toDouble() == enumV.toDouble()) activeIndex = i;
+                        if (displayText.isEmpty()) displayText = enumV.toVariant().toString();
+                        combo->addItem(displayText, enumV.toVariant());
+                        if (curVal == enumV) activeIndex = i;
                     }
                     else
                     {
@@ -910,16 +912,24 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
             }
             else
             {
-                double minVal = propSchema.value(QStringLiteral("minimum")).toDouble(0.0);
-                double maxVal = propSchema.value(QStringLiteral("maximum")).toDouble(100000.0);
-
                 if (propType == QStringLiteral("integer"))
                 {
-                    QSpinBox* spin = new QSpinBox(_featuresWidget);
-                    spin->setRange(static_cast<int>(minVal), static_cast<int>(maxVal));
-                    spin->setValue(curVal.toInt(0));
-                    connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), this, &QGocatorWidget::onParameterChanged);
-                    editorWidget = spin;
+                    const qint64 minimum = propSchema.value(QStringLiteral("minimum")).toInteger(std::numeric_limits<qint64>::min());
+                    const qint64 maximum = propSchema.value(QStringLiteral("maximum")).toInteger(std::numeric_limits<qint64>::max());
+                    if (minimum >= std::numeric_limits<int>::min() && maximum <= std::numeric_limits<int>::max()) {
+                        auto* spin = new QSpinBox(_featuresWidget);
+                        spin->setRange(static_cast<int>(minimum), static_cast<int>(maximum));
+                        spin->setValue(curVal.toInt());
+                        connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), this, &QGocatorWidget::onParameterChanged);
+                        editorWidget = spin;
+                    } else {
+                        auto* text = new QLineEdit(QString::number(curVal.toInteger()), _featuresWidget);
+                        text->setProperty("gocatorInteger", true);
+                        text->setProperty("gocatorMinimum", minimum);
+                        text->setProperty("gocatorMaximum", maximum);
+                        connect(text, &QLineEdit::editingFinished, this, &QGocatorWidget::onParameterChanged);
+                        editorWidget = text;
+                    }
                 }
                 else // number
                 {
@@ -927,7 +937,8 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
                     const double currentValue = curVal.toDouble(0.0);
                     const int decimals = schemaDecimalPlaces(propSchema, currentValue);
                     spin->setDecimals(decimals);
-                    spin->setRange(minVal, maxVal);
+                    spin->setRange(propSchema.value(QStringLiteral("minimum")).toDouble(-std::numeric_limits<double>::max()),
+                        propSchema.value(QStringLiteral("maximum")).toDouble(std::numeric_limits<double>::max()));
                     spin->setValue(currentValue);
                     spin->setSingleStep(schemaStep(propSchema, decimals));
                     connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &QGocatorWidget::onParameterChanged);
@@ -954,12 +965,17 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
                 connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &QGocatorWidget::onParameterChanged);
                 editorWidget = combo;
             }
+            else
+            {
+                auto* text = new QLineEdit(curVal.toString(), _featuresWidget);
+                connect(text, &QLineEdit::editingFinished, this, &QGocatorWidget::onParameterChanged);
+                editorWidget = text;
+            }
         }
 
         if (editorWidget)
         {
             editorWidget->setObjectName(QStringLiteral("gocatorFeature_") + name);
-            const bool readOnly = propSchema.value(QStringLiteral("readOnly")).toBool(false);
             editorWidget->setProperty("gocatorReadOnly", readOnly);
             editorWidget->setEnabled(!readOnly);
             _featuresWidget->setItemWidget(item, 1, editorWidget);
@@ -997,6 +1013,19 @@ void QGocatorWidget::onParameterChanged()
     {
         jsonVal = QJsonValue::fromVariant(combo->currentData());
     }
+    else if (auto* text = qobject_cast<QLineEdit*>(senderWidget))
+    {
+        if (text->property("gocatorInteger").toBool()) {
+            bool valid = false;
+            const auto number = text->text().toLongLong(&valid);
+            if (!valid || number < text->property("gocatorMinimum").toLongLong()
+                || number > text->property("gocatorMaximum").toLongLong()) {
+                logMessage(tr("Integer value is outside the schema bounds."), true);
+                return;
+            }
+            jsonVal = QJsonValue(number);
+        } else jsonVal = text->text();
+    }
 
     if (!jsonVal.isNull())
     {
@@ -1006,19 +1035,9 @@ void QGocatorWidget::onParameterChanged()
             return;
         }
 
-        QString jsonValueStr;
-        if (jsonVal.isBool())
-        {
-            jsonValueStr = jsonVal.toBool() ? QStringLiteral("true") : QStringLiteral("false");
-        }
-        else if (jsonVal.isDouble())
-        {
-            jsonValueStr = QString::number(jsonVal.toDouble(), 'g', 17);
-        }
-        else if (jsonVal.isString())
-        {
-            jsonValueStr = "\"" + jsonVal.toString() + "\"";
-        }
+        // JSON serialization must preserve quotes, backslashes, control characters and Unicode.
+        QByteArray encoded = QJsonDocument(QJsonArray{jsonVal}).toJson(QJsonDocument::Compact);
+        const QString jsonValueStr = QString::fromUtf8(encoded.mid(1, encoded.size() - 2));
 
         Gocator::ParameterTarget target = mapping.target;
         std::string path = mapping.path.toStdString();
@@ -1031,7 +1050,11 @@ void QGocatorWidget::onParameterChanged()
         auto future = QtConcurrent::run([gocator, target, path, valStr]() {
             if (gocator)
             {
-                gocator->setParameterValue(target, path, valStr);
+                try { gocator->setParameterValue(target, path, valStr); }
+                catch (const std::exception& error) {
+                    qCWarning(gocatorDiagnosticLog) << "Parameter write failed:" << error.what();
+                    return;
+                }
                 // The core reports SDK failures; this record confirms dispatch, not readback acceptance.
                 qCDebug(gocatorDiagnosticLog).noquote() << "@diagnostic " + QString::fromUtf8(QJsonDocument(QJsonObject{
                     {"event", "parameter_dispatched"}, {"fields", QJsonObject{
@@ -1051,16 +1074,32 @@ void QGocatorWidget::onParameterChanged()
 
 void QGocatorWidget::updateFeatureValues()
 {
+    fetchFeatureData(false);
+}
+
+void QGocatorWidget::fetchFeatureData(bool rebuild)
+{
     if (!_gocator || _shuttingDown || !_gocator->isOpened()) return;
     if (_featureDataWatcher.isRunning()) return;
 
     Gocator* gocator = _gocator;
-    auto future = QtConcurrent::run([gocator]() -> FeatureDataResult {
+    auto future = QtConcurrent::run([gocator, rebuild]() -> FeatureDataResult {
         if (!gocator) return {};
-        return {
+        FeatureDataResult result{
             QString::fromStdString(gocator->getParametersData(Gocator::ParameterTarget::Scanner)),
-            QString::fromStdString(gocator->getParametersData(Gocator::ParameterTarget::Sensor))
-        };
+            QString::fromStdString(gocator->getParametersData(Gocator::ParameterTarget::Sensor)), {}};
+        try { result.systemData = QString::fromStdString(gocator->getParametersData(Gocator::ParameterTarget::System)); }
+        catch (const std::exception& error) { qCWarning(gocatorDiagnosticLog) << "System observation failed:" << error.what(); }
+        result.rebuild = rebuild;
+        if (rebuild) {
+            result.scannerSchema = QString::fromStdString(gocator->getParametersSchema(Gocator::ParameterTarget::Scanner));
+            result.sensorSchema = QString::fromStdString(gocator->getParametersSchema(Gocator::ParameterTarget::Sensor));
+            result.systemSchema = QString::fromStdString(gocator->getParametersSchema(Gocator::ParameterTarget::System));
+            const auto info = gocator->getConnectedDeviceInfo();
+            result.deviceLabel = QString::fromStdString(info.address.empty() ? gocator->getConnectedAddress()
+                : formatDeviceName(info.model, info.serial, info.address, info.isVirtual));
+        }
+        return result;
     });
 
     setConnectionOperationActive(true);
@@ -1080,8 +1119,7 @@ void QGocatorWidget::applyFeatureValues(const FeatureDataResult& result)
             {"scanner", scannerData}, {"sensor", sensorData},
             {"complete", !scannerData.isEmpty() && !sensorData.isEmpty()}}}}).toJson(QJsonDocument::Compact));
 
-    QJsonObject scannerParams = scannerData.value(QStringLiteral("parameters")).toObject();
-    QJsonObject sensorParams = sensorData.value(QStringLiteral("parameters")).toObject();
+    const QJsonObject systemData = QJsonDocument::fromJson(result.systemData.toUtf8()).object();
 
     _updatingFeatures = true;
 
@@ -1092,34 +1130,12 @@ void QGocatorWidget::applyFeatureValues(const FeatureDataResult& result)
 
         if (!widget) continue;
 
-        QString relativePath = mapping.path;
-        QJsonObject currentObj;
-        currentObj = mapping.target == Gocator::ParameterTarget::Scanner ? scannerData : sensorData;
-
-        if (relativePath.startsWith(QStringLiteral("/parameters")))
-        {
-            if (mapping.target == Gocator::ParameterTarget::Scanner) currentObj = scannerParams;
-            else currentObj = sensorParams;
-            relativePath = relativePath.mid(11);
-        }
-        if (relativePath.startsWith(QStringLiteral("/")))
-        {
-            relativePath = relativePath.mid(1);
-        }
-
-        QStringList segments = relativePath.split(QStringLiteral("/"));
-        QJsonValue targetVal;
-
-        for (int i = 0; i < segments.size(); ++i)
-        {
-            if (i == segments.size() - 1)
-            {
-                targetVal = currentObj.value(segments[i]);
-            }
-            else
-            {
-                currentObj = currentObj.value(segments[i]).toObject();
-            }
+        QJsonValue targetVal = mapping.target == Gocator::ParameterTarget::System ? systemData
+            : mapping.target == Gocator::ParameterTarget::Scanner ? scannerData : sensorData;
+        const auto segments = mapping.path.mid(1).split(QStringLiteral("/"));
+        for (QString token : segments) {
+            token.replace(QStringLiteral("~1"), QStringLiteral("/")).replace(QStringLiteral("~0"), QStringLiteral("~"));
+            targetVal = targetVal.toObject().value(token);
         }
 
         if (targetVal.isUndefined() || targetVal.isNull())
@@ -1141,17 +1157,14 @@ void QGocatorWidget::applyFeatureValues(const FeatureDataResult& result)
         {
             dspin->setValue(targetVal.toDouble());
         }
+        else if (auto* text = qobject_cast<QLineEdit*>(widget))
+        {
+            text->setText(text->property("gocatorInteger").toBool()
+                ? QString::number(targetVal.toInteger()) : targetVal.toString());
+        }
         else if (auto* combo = qobject_cast<QComboBox*>(widget))
         {
-            int index = -1;
-            if (targetVal.isDouble())
-            {
-                index = combo->findData(targetVal.toDouble());
-            }
-            else
-            {
-                index = combo->findData(targetVal.toString());
-            }
+            const int index = combo->findData(targetVal.toVariant());
             if (index >= 0)
             {
                 combo->setCurrentIndex(index);

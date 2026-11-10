@@ -64,6 +64,37 @@ Grab callbacks run on the module's receive path. Keep callbacks bounded and avoi
 
 Parameter schema, data, and write methods perform synchronous REST requests. A GUI or latency-sensitive consumer must move those calls off its event thread and define its own timeout and cancellation behavior.
 
+## SDK coverage and control semantics
+
+The module follows the bundled GoPxL SDK public contracts. It does not infer
+software-trigger REST routes from other Gocator SDK generations.
+
+| GoPxL capability | Module integration |
+| --- | --- |
+| Discovery, connect/disconnect, GDP reception, `Start`/`Stop` | Existing acquisition facade and controls. Live keeps reception active; the configured sensor trigger source determines when data arrives. |
+| `RunningState` | `systemState()` and the read-only System / Running state tree field. This is the sensor state, distinct from the local GDP grabbing flag. |
+| `QuickEditEnabled`, `EnableQuickEdit`, `DisableQuickEdit` | `systemState()`, `setQuickEditEnabled()` and System / Quick edit. This suppresses recalculation of existing scan data during edits; it is not a trigger or acquisition mode. No automatic enable/disable is performed. |
+| Resource schema/data/`SetJson` | Scanner and Sensor feature trees; boolean, signed 64-bit integer, floating-point, string and enumeration values. Object read-only access is inherited and JSON-pointer tokens are escaped. |
+| `Client`, managed `Resource`/`ResourceManager`, `SensorPath`, disconnect handlers | SDK infrastructure; arbitrary resource traversal, subscriptions, multi-sensor selection and automatic disconnect recovery are not exposed as consumer commands by this facade. |
+| Software trigger | No dedicated command in the supported `GoSystem` API. No inferred REST endpoint or simulated trigger is added. |
+
+The optional adapter exposes `IDeviceParameterControl` for the **System** scope:
+`runningState` is a read-only enumeration (`ready`, `running`, `conflict`), and
+`quickEditEnabled` is a read/write boolean. The existing GUI and callable path
+use the same core SDK functions. Targets contain a controller identity and
+connection generation; observations have revisions, and writes validate a fresh
+observation before SDK dispatch. Completion preserves actual readback, or an
+acknowledged/uncertain effect when the SDK or follow-up observation fails.
+Commands and Scanner/Sensor typed API targets are explicitly unsupported; the
+existing Scanner/Sensor GUI resource editors remain available. Connection and
+Single/Live callable controls are not added by this parameter capability.
+
+Initial schemas, values and device labels are fetched on a worker. Only copied
+JSON updates the GUI. System writes are serialized with connection destruction;
+this does not turn two remote SDK observations into an atomic device snapshot
+or establish a settings-to-frame fence. Structured arrays and unsupported schema
+types are not converted into speculative editors.
+
 ## Validation
 
 `GOCATOR_BUILD_TESTS=ON` requires `GOCATOR_BUILD_QT_UI=ON` because the focused test executable exercises `QGocatorWidget`. A successful build establishes only compile/link compatibility; discovery, REST configuration, profile/surface payloads, reconnect behavior, and throughput require validation with the intended SDK package and sensor firmware.

@@ -3,6 +3,10 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
+#include <QCheckBox>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <stdexcept>
 
 #include "GocatorDiscoveryDiagnostics.h"
 #include "GrabCallbackState.h"
@@ -19,6 +23,11 @@ private slots:
     void diagnosticsBubblesFollowLiveAndFailureState();
     void grabCallbackStateCountsOnlyDeliveredFrames();
     void discoveryMessageClassifiesNoDevices();
+    void stringFeaturesAndEscapedPaths();
+    void inheritedReadOnlySurvivesRefresh();
+    void officialSystemSchemaAndDisconnectedGuards();
+    void integerValuesRetainSigned64BitPrecision();
+    void systemTreeMatchesOfficialControls();
 };
 
 namespace
@@ -152,6 +161,94 @@ void QGocatorWidgetTests::discoveryMessageClassifiesNoDevices()
     QVERIFY(gocator::discoveryMeansNoDevices("Discovery failed: Failed in discovering instances."));
     QVERIFY(!gocator::discoveryMeansNoDevices("Failed to connect to the device"));
     QVERIFY(!gocator::discoveryMeansNoDevices(""));
+}
+
+namespace {
+class FeatureFixture final : public QGocatorWidget {
+public:
+    using QGocatorWidget::addFeatureNode;
+    using QGocatorWidget::setFeatureEditorsEnabled;
+    void refreshScanner(const QString& json) { applyFeatureValues({json, {}, {}}); }
+};
+}
+
+void QGocatorWidgetTests::stringFeaturesAndEscapedPaths()
+{
+    FeatureFixture widget;
+    const QString name = QStringLiteral("path/~name");
+    const QString initial = QStringLiteral("initial");
+    widget.addFeatureNode(nullptr, Gocator::ParameterTarget::Scanner, QString(), name,
+        QJsonObject{{"type", "string"}}, QJsonObject{{name, initial}});
+    auto* text = widget.findChild<QLineEdit*>(QStringLiteral("gocatorFeature_") + name);
+    QVERIFY(text);
+    QCOMPARE(text->text(), initial);
+    const QString updated = QStringLiteral("quoted \"value\" \\ path\nline");
+    widget.refreshScanner(QString::fromUtf8(QJsonDocument(QJsonObject{{name, updated}}).toJson()));
+    QCOMPARE(text->text(), updated);
+}
+
+void QGocatorWidgetTests::inheritedReadOnlySurvivesRefresh()
+{
+    FeatureFixture widget;
+    widget.addFeatureNode(nullptr, Gocator::ParameterTarget::Sensor, QString(), QStringLiteral("group"),
+        QJsonObject{{"type", "object"}, {"readOnly", true}, {"properties", QJsonObject{
+            {"enabled", QJsonObject{{"type", "boolean"}}}}}},
+        QJsonObject{{"group", QJsonObject{{"enabled", true}}}});
+    auto* check = widget.findChild<QCheckBox*>(QStringLiteral("gocatorFeature_enabled"));
+    QVERIFY(check);
+    QVERIFY(check->isChecked());
+    QVERIFY(!check->isEnabled());
+    widget.setFeatureEditorsEnabled(true);
+    QVERIFY(!check->isEnabled());
+}
+
+void QGocatorWidgetTests::officialSystemSchemaAndDisconnectedGuards()
+{
+    Gocator device;
+    const auto schema = QJsonDocument::fromJson(QByteArray::fromStdString(
+        device.getParametersSchema(Gocator::ParameterTarget::System))).object();
+    const auto fields = schema["properties"].toObject()["parameters"].toObject()["properties"].toObject();
+    QCOMPARE(fields["quickEditEnabled"].toObject()["type"].toString(), QStringLiteral("boolean"));
+    QVERIFY(fields["runningState"].toObject()["readOnly"].toBool());
+    QVERIFY_EXCEPTION_THROWN(device.systemState(), std::logic_error);
+    QVERIFY_EXCEPTION_THROWN(device.setQuickEditEnabled(true), std::logic_error);
+    QVERIFY_EXCEPTION_THROWN(device.setParameterValue(Gocator::ParameterTarget::System,
+        "/parameters/runningState", "true"), std::invalid_argument);
+    QVERIFY_EXCEPTION_THROWN(device.getParametersData("unknown"), std::invalid_argument);
+}
+
+void QGocatorWidgetTests::integerValuesRetainSigned64BitPrecision()
+{
+    FeatureFixture widget;
+    constexpr qint64 first = 9007199254740993LL;
+    widget.addFeatureNode(nullptr, Gocator::ParameterTarget::Scanner, QString(), QStringLiteral("counter"),
+        QJsonObject{{"type", "integer"}}, QJsonObject{{"counter", QJsonValue(first)}});
+    auto* text = widget.findChild<QLineEdit*>(QStringLiteral("gocatorFeature_counter"));
+    QVERIFY(text);
+    QCOMPARE(text->text(), QStringLiteral("9007199254740993"));
+    widget.refreshScanner(QStringLiteral("{\"counter\":9223372036854775807}"));
+    QCOMPARE(text->text(), QStringLiteral("9223372036854775807"));
+}
+
+void QGocatorWidgetTests::systemTreeMatchesOfficialControls()
+{
+    FeatureFixture widget;
+    Gocator device;
+    const auto schema = QJsonDocument::fromJson(QByteArray::fromStdString(
+        device.getParametersSchema(Gocator::ParameterTarget::System))).object();
+    const auto fields = schema["properties"].toObject()["parameters"].toObject()["properties"].toObject();
+    const QJsonObject values{{"runningState", "conflict"}, {"quickEditEnabled", true}};
+    for (auto it = fields.begin(); it != fields.end(); ++it)
+        widget.addFeatureNode(nullptr, Gocator::ParameterTarget::System, QStringLiteral("/parameters"),
+            it.key(), it.value().toObject(), values);
+    auto* running = widget.findChild<QComboBox*>(QStringLiteral("gocatorFeature_runningState"));
+    auto* quick = widget.findChild<QCheckBox*>(QStringLiteral("gocatorFeature_quickEditEnabled"));
+    QVERIFY(running);
+    QCOMPARE(running->currentData().toString(), QStringLiteral("conflict"));
+    QVERIFY(!running->isEnabled());
+    QVERIFY(quick);
+    QVERIFY(quick->isEnabled());
+    QVERIFY(quick->isChecked());
 }
 
 QTEST_MAIN(QGocatorWidgetTests)
