@@ -36,6 +36,7 @@ endif()
 
 add_library(gocator_core
     Gocator.cpp
+    GrabCallbackState.h
     Internal/GocatorAcquisition.cpp
     Internal/GocatorConnection.cpp
     Internal/GocatorDiscovery.cpp

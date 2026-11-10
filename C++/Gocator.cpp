@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "Internal/GocatorConnection.h"
+#include "GrabCallbackState.h"
 #include "Internal/GocatorDiscovery.h"
 #include "Internal/GocatorResourceClient.h"
 
@@ -153,8 +154,7 @@ struct Gocator::Impl
 
     size_t frameSeq = 0;
     size_t frameTarget = 0;
-    std::atomic<std::uint64_t> deliveredFrames{0};
-    std::atomic<std::uint64_t> failedFrames{0};
+    GrabCallbackState callbackState;
     std::function<void(const GoPxLSdk::GoDataSet&)> dataCallback;
     std::mutex stopWorkerMutex;
     std::thread stopWorker;
@@ -376,8 +376,7 @@ struct Gocator::Impl
 
             frameSeq = 0;
             frameTarget = frames;
-            deliveredFrames.store(0, std::memory_order_relaxed);
-            failedFrames.store(0, std::memory_order_relaxed);
+            callbackState.reset();
             stopRequested.store(false);
             isGrabbing.store(true);
 
@@ -425,7 +424,7 @@ struct Gocator::Impl
     {
         if (!isGrabbing.load()) return;
 
-        bool delivered = false;
+        callbackState.beginFrame();
         {
             std::vector<GrabCallback> callbacks;
             {
@@ -443,25 +442,22 @@ struct Gocator::Impl
                 try
                 {
                     cb(dataSet, frameSeq);
-                    delivered = true;
+                    callbackState.noteSuccess();
                 }
                 catch (const std::exception& e)
                 {
-                    failedFrames.fetch_add(1, std::memory_order_relaxed);
+                    callbackState.noteFailure();
                     Gocator::syslog("Gocator grab callback failed: " + std::string(e.what()), true);
                 }
                 catch (...)
                 {
-                    failedFrames.fetch_add(1, std::memory_order_relaxed);
+                    callbackState.noteFailure();
                     Gocator::syslog("Gocator grab callback failed with an unknown exception.", true);
                 }
             }
         }
 
-        if (delivered)
-        {
-            deliveredFrames.fetch_add(1, std::memory_order_relaxed);
-        }
+        callbackState.finishFrame();
         frameSeq++;
         if (frameTarget > 0 && frameSeq >= frameTarget)
         {
@@ -605,11 +601,12 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices()
     }
     catch (const std::exception& e)
     {
-        syslog("Discovery failed: " + std::string(e.what()), true);
+        // A missing camera is a normal discovery outcome, not a warning.
+        syslog("Discovery failed: " + std::string(e.what()), false);
     }
     catch (...)
     {
-        syslog("Discovery failed with unknown error", true);
+        syslog("Discovery failed with unknown error", false);
     }
     return result;
 }
@@ -663,8 +660,8 @@ bool Gocator::isGrabbing() const
 GocatorRuntimeDiagnostics Gocator::runtimeDiagnostics() const noexcept
 {
     return {_impl->isGrabbing.load(std::memory_order_acquire),
-        _impl->deliveredFrames.load(std::memory_order_acquire),
-        _impl->failedFrames.load(std::memory_order_acquire)};
+        _impl->callbackState.deliveredFrames(),
+        _impl->callbackState.failedCallbacks()};
 }
 
 std::string Gocator::getConnectedAddress() const

@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QLineEdit>
 
+#include "GrabCallbackState.h"
 #include "Utility/Qt/QGocatorWidget.h"
 
 class QGocatorWidgetTests : public QObject
@@ -15,6 +16,7 @@ private slots:
     void editedAddressOverridesSelectedDevice();
     void diagnosticsBubblesStartHidden();
     void diagnosticsBubblesFollowLiveAndFailureState();
+    void grabCallbackStateCountsOnlyDeliveredFrames();
 };
 
 namespace
@@ -112,6 +114,34 @@ void QGocatorWidgetTests::diagnosticsBubblesFollowLiveAndFailureState()
     widget.setGrabbing(false);
     QVERIFY(widget.fpsBubble()->isHidden());
     QVERIFY(widget.failedBubble()->isHidden());
+}
+
+void QGocatorWidgetTests::grabCallbackStateCountsOnlyDeliveredFrames()
+{
+    GrabCallbackState state;
+    state.reset();
+
+    state.beginFrame();
+    state.noteFailure();
+    state.finishFrame();
+    QCOMPARE(state.deliveredFrames(), std::uint64_t{0});
+    QCOMPARE(state.failedCallbacks(), std::uint64_t{1});
+
+    state.beginFrame();
+    state.noteFailure();
+    state.noteSuccess();
+    state.finishFrame();
+    QCOMPARE(state.deliveredFrames(), std::uint64_t{1});
+    QCOMPARE(state.failedCallbacks(), std::uint64_t{2});
+
+    state.beginFrame();
+    state.finishFrame();
+    QCOMPARE(state.deliveredFrames(), std::uint64_t{1});
+    QCOMPARE(state.failedCallbacks(), std::uint64_t{2});
+
+    state.reset();
+    QCOMPARE(state.deliveredFrames(), std::uint64_t{0});
+    QCOMPARE(state.failedCallbacks(), std::uint64_t{0});
 }
 
 QTEST_MAIN(QGocatorWidgetTests)
