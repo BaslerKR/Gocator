@@ -202,10 +202,22 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     });
 
     connect(&_featureDataWatcher, &QFutureWatcher<FeatureDataResult>::finished, this, [this]() {
-        if (_shuttingDown || !_gocator) return;
-        const auto result = _featureDataWatcher.result();
-        if (result.rebuild) applyFeatureSnapshot(result);
-        else applyFeatureValues(result);
+        if (_shuttingDown) return;
+        if (featureDataAvailable()) {
+            try {
+                const auto result = _featureDataWatcher.result();
+                if (result.rebuild) applyFeatureSnapshot(result);
+                else applyFeatureValues(result);
+            } catch (const std::exception& error) { logMessage(QString::fromUtf8(error.what()), true); }
+        }
+        _featureRefreshActive = false;
+        const bool pending = _featureRefreshPending;
+        const bool rebuild = _featureRebuildPending;
+        _featureRefreshPending = _featureRebuildPending = false;
+        if (pending) {
+            fetchFeatureData(rebuild);
+            if (_featureRefreshActive) return;
+        }
         setConnectionOperationActive(false);
         setRunningState(_grabbing);
     });
@@ -582,7 +594,7 @@ void QGocatorWidget::setRunningState(bool running)
     _toolGrabOne->setEnabled(_gocator && _gocator->isOpened() && !running);
     _toolGrabLive->setEnabled(_gocator && _gocator->isOpened());
 
-    setFeatureEditorsEnabled(!running && !_parameterUpdateActive);
+    setFeatureEditorsEnabled(!running && !_parameterUpdateActive && !_featureRefreshActive);
 }
 
 QString QGocatorWidget::ipAddress() const
@@ -696,8 +708,8 @@ void QGocatorWidget::setScanLengthMm(double length)
     if (_gocator && _gocator->isOpened())
     {
         _gocator->setScanLengthMm(length);
-        populateFeatures();
     }
+    populateFeatures();
 }
 
 void QGocatorWidget::setScanMode(Gocator::ScanMode mode)
@@ -708,8 +720,8 @@ void QGocatorWidget::setScanMode(Gocator::ScanMode mode)
     if (_gocator && _gocator->isOpened())
     {
         _gocator->setScanMode(mode);
-        populateFeatures();
     }
+    populateFeatures();
 }
 
 void QGocatorWidget::setExposureUs(int exposure)
@@ -719,8 +731,8 @@ void QGocatorWidget::setExposureUs(int exposure)
     if (_gocator && _gocator->isOpened())
     {
         _gocator->setExposureUs(exposure);
-        populateFeatures();
     }
+    populateFeatures();
 }
 
 void QGocatorWidget::setIntensityEnabled(bool enable)
@@ -730,8 +742,8 @@ void QGocatorWidget::setIntensityEnabled(bool enable)
     if (_gocator && _gocator->isOpened())
     {
         _gocator->setIntensityEnabled(enable);
-        populateFeatures();
     }
+    populateFeatures();
 }
 
 void QGocatorWidget::setUniformSpacingEnabled(bool enable)
@@ -741,8 +753,8 @@ void QGocatorWidget::setUniformSpacingEnabled(bool enable)
     if (_gocator && _gocator->isOpened())
     {
         _gocator->setUniformSpacingEnabled(enable);
-        populateFeatures();
     }
+    populateFeatures();
 }
 
 void QGocatorWidget::clearFeatures()
@@ -807,8 +819,7 @@ void QGocatorWidget::applyFeatureSnapshot(const FeatureDataResult& result)
         category->setExpanded(false);
     };
 
-    if (!result.systemData.isEmpty())
-        addResourceCategory(QStringLiteral("System"), Gocator::ParameterTarget::System,
+    addResourceCategory(QStringLiteral("System"), Gocator::ParameterTarget::System,
             QJsonDocument::fromJson(result.systemSchema.toUtf8()).object(),
             QJsonDocument::fromJson(result.systemData.toUtf8()).object());
 
@@ -977,7 +988,18 @@ void QGocatorWidget::addFeatureNode(QTreeWidgetItem* parentItem, Gocator::Parame
         {
             editorWidget->setObjectName(QStringLiteral("gocatorFeature_") + name);
             editorWidget->setProperty("gocatorReadOnly", readOnly);
-            editorWidget->setEnabled(!readOnly);
+            const bool observed = !curVal.isUndefined() && !curVal.isNull();
+            editorWidget->setProperty("gocatorObserved", observed);
+            editorWidget->setEnabled(observed && !readOnly);
+            if (!observed) {
+                editorWidget->setToolTip(tr("Value not observed."));
+                if (auto* check = qobject_cast<QCheckBox*>(editorWidget)) {
+                    check->setTristate(true);
+                    check->setCheckState(Qt::PartiallyChecked);
+                } else if (auto* combo = qobject_cast<QComboBox*>(editorWidget)) combo->setCurrentIndex(-1);
+                else if (auto* spin = qobject_cast<QAbstractSpinBox*>(editorWidget)) spin->clear();
+                else if (auto* text = qobject_cast<QLineEdit*>(editorWidget)) text->clear();
+            }
             _featuresWidget->setItemWidget(item, 1, editorWidget);
             _widgetToFeatureMap.insert(editorWidget, FeatureMapping{target, path, displayName});
         }
@@ -1077,31 +1099,40 @@ void QGocatorWidget::updateFeatureValues()
     fetchFeatureData(false);
 }
 
+bool QGocatorWidget::featureDataAvailable() const
+{
+    return _gocator && _gocator->isOpened();
+}
+
+QGocatorWidget::FeatureDataResult QGocatorWidget::readFeatureData(bool rebuild) const
+{
+    FeatureDataResult result{
+        QString::fromStdString(_gocator->getParametersData(Gocator::ParameterTarget::Scanner)),
+        QString::fromStdString(_gocator->getParametersData(Gocator::ParameterTarget::Sensor)), {}};
+    try { result.systemData = QString::fromStdString(_gocator->getParametersData(Gocator::ParameterTarget::System)); }
+    catch (const std::exception& error) { qCWarning(gocatorDiagnosticLog) << "System observation failed:" << error.what(); }
+    result.rebuild = rebuild;
+    if (rebuild) {
+        result.scannerSchema = QString::fromStdString(_gocator->getParametersSchema(Gocator::ParameterTarget::Scanner));
+        result.sensorSchema = QString::fromStdString(_gocator->getParametersSchema(Gocator::ParameterTarget::Sensor));
+        result.systemSchema = QString::fromStdString(_gocator->getParametersSchema(Gocator::ParameterTarget::System));
+        const auto info = _gocator->getConnectedDeviceInfo();
+        result.deviceLabel = QString::fromStdString(info.address.empty() ? _gocator->getConnectedAddress()
+            : formatDeviceName(info.model, info.serial, info.address, info.isVirtual));
+    }
+    return result;
+}
+
 void QGocatorWidget::fetchFeatureData(bool rebuild)
 {
-    if (!_gocator || _shuttingDown || !_gocator->isOpened()) return;
-    if (_featureDataWatcher.isRunning()) return;
-
-    Gocator* gocator = _gocator;
-    auto future = QtConcurrent::run([gocator, rebuild]() -> FeatureDataResult {
-        if (!gocator) return {};
-        FeatureDataResult result{
-            QString::fromStdString(gocator->getParametersData(Gocator::ParameterTarget::Scanner)),
-            QString::fromStdString(gocator->getParametersData(Gocator::ParameterTarget::Sensor)), {}};
-        try { result.systemData = QString::fromStdString(gocator->getParametersData(Gocator::ParameterTarget::System)); }
-        catch (const std::exception& error) { qCWarning(gocatorDiagnosticLog) << "System observation failed:" << error.what(); }
-        result.rebuild = rebuild;
-        if (rebuild) {
-            result.scannerSchema = QString::fromStdString(gocator->getParametersSchema(Gocator::ParameterTarget::Scanner));
-            result.sensorSchema = QString::fromStdString(gocator->getParametersSchema(Gocator::ParameterTarget::Sensor));
-            result.systemSchema = QString::fromStdString(gocator->getParametersSchema(Gocator::ParameterTarget::System));
-            const auto info = gocator->getConnectedDeviceInfo();
-            result.deviceLabel = QString::fromStdString(info.address.empty() ? gocator->getConnectedAddress()
-                : formatDeviceName(info.model, info.serial, info.address, info.isVirtual));
-        }
-        return result;
-    });
-
+    if (_shuttingDown || !featureDataAvailable()) return;
+    if (_featureRefreshActive) {
+        _featureRefreshPending = true;
+        _featureRebuildPending |= rebuild;
+        return;
+    }
+    _featureRefreshActive = true;
+    auto future = QtConcurrent::run([this, rebuild] { return readFeatureData(rebuild); });
     setConnectionOperationActive(true);
     _toolGrabOne->setEnabled(false);
     _toolGrabLive->setEnabled(false);
@@ -1144,9 +1175,12 @@ void QGocatorWidget::applyFeatureValues(const FeatureDataResult& result)
         }
 
         QSignalBlocker blocker(widget);
+        widget->setProperty("gocatorObserved", true);
+        widget->setToolTip(QString());
 
         if (auto* check = qobject_cast<QCheckBox*>(widget))
         {
+            check->setTristate(false);
             check->setChecked(targetVal.toBool());
         }
         else if (auto* spin = qobject_cast<QSpinBox*>(widget))
@@ -1182,7 +1216,7 @@ void QGocatorWidget::setFeatureEditorsEnabled(bool enabled)
         if (it.key())
         {
             const bool readOnly = it.key()->property("gocatorReadOnly").toBool();
-            it.key()->setEnabled(enabled && !readOnly);
+            it.key()->setEnabled(enabled && !readOnly && it.key()->property("gocatorObserved").toBool());
         }
     }
 }

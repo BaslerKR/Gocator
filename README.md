@@ -90,7 +90,10 @@ existing Scanner/Sensor GUI resource editors remain available. Connection and
 Single/Live callable controls are not added by this parameter capability.
 
 Initial schemas, values and device labels are fetched on a worker. Only copied
-JSON updates the GUI. System writes are serialized with connection destruction;
+JSON updates the GUI. Requests arriving during a read are coalesced into a
+follow-up read, with schema rebuilds taking priority over value-only refreshes.
+The static System category remains present with unavailable values after an
+initial observation failure and can recover on a value refresh. System writes are serialized with connection destruction;
 this does not turn two remote SDK observations into an atomic device snapshot
 or establish a settings-to-frame fence. Structured arrays and unsupported schema
 types are not converted into speculative editors.

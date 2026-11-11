@@ -95,8 +95,14 @@ private:
 
     /** Rebuilds scanner and sensor feature editors from live resource schemas. */
     void populateFeatures();
-    /** @brief Fetches SDK resources on a worker; only copied JSON reaches the GUI. */
+protected:
+    /** @brief Queues a refresh, retaining rebuild priority while a worker is active. */
     void fetchFeatureData(bool rebuild);
+    /** @brief Reports whether resource reads can start; native fixtures may supply synthetic data. */
+    virtual bool featureDataAvailable() const;
+    /** @brief Copies SDK resource data on the worker; never writes widgets. */
+    virtual FeatureDataResult readFeatureData(bool rebuild) const;
+private:
     void clearFeatures();
     void applyDiscoveredDevices(const std::vector<Gocator::DeviceInfo>& devices);
 
@@ -155,6 +161,10 @@ private:
     bool _updatingFeatures = false;
     bool _grabbing = false;
     bool _parameterUpdateActive = false;
+    // GUI-owned until the finished slot consumes the result, even if the future is already done.
+    bool _featureRefreshActive = false;
+    bool _featureRefreshPending = false;
+    bool _featureRebuildPending = false;
 };
 #endif
 

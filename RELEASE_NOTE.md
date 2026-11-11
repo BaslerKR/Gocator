@@ -13,6 +13,8 @@
 
 ## Unreleased
 
+- Retain pending feature refreshes while a read is active, prioritize schema rebuilds, and recover the static System controls after an initial observation failure without reconnecting.
+
 - Expose official GoSystem running-state and Quick Edit controls through the core facade, existing feature tree and typed System parameter capability, with connection/revision checks and actual readback.
 - Fetch initial feature resources off the GUI thread; support plain strings, exact signed 64-bit integer values, escaped JSON-pointer keys and inherited read-only access without inventing trigger commands.
 - Keep a failed acquisition start inactive until the producer reports an actual transition.
