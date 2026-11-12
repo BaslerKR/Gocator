@@ -85,9 +85,19 @@ use the same core SDK functions. Targets contain a controller identity and
 connection generation; observations have revisions, and writes validate a fresh
 observation before SDK dispatch. Completion preserves actual readback, or an
 acknowledged/uncertain effect when the SDK or follow-up observation fails.
-Commands and Scanner/Sensor typed API targets are explicitly unsupported; the
-existing Scanner/Sensor GUI resource editors remain available. Connection and
-Single/Live callable controls are not added by this parameter capability.
+The same adapter exposes `IDeviceConnectionControl` for discovery, connect and
+disconnect. Targets come from the cached discovery catalog; `targetId` is the
+sensor address and the model, serial and virtual flag are descriptive
+attributes. `connectionId` is a controller-scoped connection generation, so an
+id from an earlier connection is refused as stale. Discovery is refused while
+connected or grabbing. Single and Live remain unavailable because acquisition
+uses `source.start` and `source.stop`. A shared control gate serializes
+discovery, connect and disconnect between the Qt widget and callable clients; a
+busy gate refuses with `busy`, and the widget disables its controls while
+callable work runs.
+
+Commands and Scanner/Sensor typed API targets remain explicitly unsupported;
+the existing Scanner/Sensor GUI resource editors remain available.
 
 Initial schemas, values and device labels are fetched on a worker. Only copied
 JSON updates the GUI. Requests arriving during a read are coalesced into a

@@ -13,6 +13,8 @@
 
 ## Unreleased
 
+- Implement the standard `IDeviceConnectionControl` lifecycle over the cached discovery catalog and a shared GUI/API control gate; discovery, connect and disconnect are callable while Single and Live remain unavailable in favor of `source.start`/`source.stop`. Stale connection ids and concurrent GUI work are refused before effects.
+
 - Retain pending feature refreshes while a read is active, prioritize schema rebuilds, and recover the static System controls after an initial observation failure without reconnecting.
 
 - Expose official GoSystem running-state and Quick Edit controls through the core facade, existing feature tree and typed System parameter capability, with connection/revision checks and actual readback.
@@ -23,7 +25,6 @@
 
 - Show live producer telemetry in the device statusbar: an `fps` bubble over the delivered-frame delta and a warning `failed` bubble only when a grab callback failed. Counters reset when live acquisition starts, and both bubbles stay hidden while not grabbing.
 - Treat an empty Gocator discovery as informational; a missing camera no longer appears as a System Logs warning.
-- Build against Plugin SDK 0.2, which adds the standard device connection interface. Gocator does not implement it yet, so Playground reports its connection as unsupported.
 - Take the binary display name from the package definition (`Gocator`).
 
 ## v0.2.2 (2026-10-29)

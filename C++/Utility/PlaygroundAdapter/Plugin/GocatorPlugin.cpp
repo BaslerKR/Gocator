@@ -100,6 +100,7 @@ public:
         : _gocator(std::move(gocator)), _devices(std::move(devices)),
           _controller(std::make_unique<GocatorSourceController>(_gocator.get()))
     {
+        _gocator->setCachedDevices(_devices);
         std::weak_ptr<GocatorPluginTitleState> titleState = _titleState;
         Gocator* const gocatorForCallback = _gocator.get();
         _statusCallback = _gocator->registerStatusCallback([titleState, gocatorForCallback](Gocator::Status status, bool connected) {
@@ -126,7 +127,10 @@ public:
     {
         if (!_widget) {
             _widget = new QGocatorWidget(parent, _gocator.get());
-            _widget->setDiscoveredDevices(_devices);
+            _widget->setDiscoveredDevices(_gocator->cachedDevices());
+            QObject::connect(_controller.get(), &GocatorSourceController::inventoryChanged, _widget, [this] {
+                if (_widget) _widget->setDiscoveredDevices(_gocator->cachedDevices());
+            });
         }
         return {{QStringLiteral("device-controls"), QStringLiteral("Device Controls"),
                  Qt::LeftDockWidgetArea, _widget, true}};

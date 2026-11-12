@@ -30,54 +30,11 @@
 Q_LOGGING_CATEGORY(gocatorDiagnosticLog, "diagnostics.Gocator", QtInfoMsg)
 #include <QtConcurrent>
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <limits>
 
 namespace
 {
-std::string formatDeviceName(const std::string& model, const std::string& serial, const std::string& address, bool isVirtual = false)
-{
-    if (model.empty() || model == "Unknown")
-    {
-        if (isVirtual)
-        {
-            return "Unknown (Virtual) - " + address;
-        }
-        return "Unknown - " + address;
-    }
-
-    std::string displayName = model;
-    bool replaced = false;
-    for (const std::string& target : {"Gocator ", "gocator ", "Gocator", "gocator"})
-    {
-        size_t pos = displayName.find(target);
-        if (pos != std::string::npos)
-        {
-            displayName.replace(pos, target.length(), "G");
-            replaced = true;
-            break;
-        }
-    }
-    if (!replaced && !displayName.empty() && std::isdigit(static_cast<unsigned char>(displayName[0])))
-    {
-        displayName = "G" + displayName;
-    }
-    
-    std::string serialStr = serial;
-    if (isVirtual)
-    {
-        serialStr = "Virtual";
-    }
-    else if (serialStr.empty() || serialStr == "0")
-    {
-        serialStr = "0";
-    }
-    
-    return displayName + " (" + serialStr + ") - " + address;
-}
-
-
 /**
  * Returns the number of decimal places needed to represent a finite value.
  *
@@ -168,6 +125,10 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
 
     // Async Watchers
     connect(&_connectWatcher, &QFutureWatcher<bool>::finished, this, [this]() {
+        if (_localControlActive) {
+            if (_gocator) _gocator->endControl();
+            _localControlActive = false;
+        }
         if (_shuttingDown) return;
         bool success = _connectWatcher.result();
         setConnectionOperationActive(false);
@@ -185,6 +146,10 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
     });
 
     connect(&_discoverWatcher, &QFutureWatcher<std::vector<Gocator::DeviceInfo>>::finished, this, [this]() {
+        if (_localControlActive) {
+            if (_gocator) _gocator->endControl();
+            _localControlActive = false;
+        }
         if (_shuttingDown) return;
         std::vector<Gocator::DeviceInfo> devices = _discoverWatcher.result();
         applyDiscoveredDevices(devices);
@@ -261,6 +226,11 @@ void QGocatorWidget::prepareForShutdown()
     _featureDataWatcher.cancel();
     _featureDataWatcher.waitForFinished();
 
+    if (_localControlActive && _gocator) {
+        _gocator->endControl();
+        _localControlActive = false;
+    }
+
     if (_gocator && _statusCallbackId != 0)
     {
         _gocator->deregisterStatusCallback(_statusCallbackId);
@@ -273,17 +243,30 @@ void QGocatorWidget::onRefreshClicked()
 {
     if (!_gocator || _shuttingDown) return;
     if (_discoverWatcher.isRunning()) return;
+    if (!_gocator->tryBeginControl()) {
+        setStatus(QStringLiteral("Another device operation is active"));
+        return;
+    }
+    _localControlActive = true;
 
     _toolRefresh->setEnabled(false);
     _toolConnect->setEnabled(false);
     setStatus(QStringLiteral("Discovering"));
     emit discoveryStarted();
 
-    auto future = QtConcurrent::run([this]() {
-        if (!_gocator) return std::vector<Gocator::DeviceInfo>();
-        return _gocator->discoverDevices();
-    });
-    _discoverWatcher.setFuture(future);
+    try {
+        auto future = QtConcurrent::run([this]() {
+            if (!_gocator) return std::vector<Gocator::DeviceInfo>();
+            return _gocator->discoverDevices();
+        });
+        _discoverWatcher.setFuture(future);
+    } catch (...) {
+        _gocator->endControl();
+        _localControlActive = false;
+        setStatus(QStringLiteral("Discovery could not start"));
+        applyConnectionState(_gocator->isOpened());
+        return;
+    }
     updateStatusLabel();
 }
 
@@ -291,6 +274,10 @@ void QGocatorWidget::setDiscoveredDevices(const std::vector<Gocator::DeviceInfo>
 {
     if (_shuttingDown) return;
     applyDiscoveredDevices(devices);
+    if (_localControlActive || _externalControlActive) {
+        _toolRefresh->setEnabled(false);
+        _toolConnect->setEnabled(false);
+    }
 }
 
 void QGocatorWidget::applyDiscoveredDevices(const std::vector<Gocator::DeviceInfo>& devices)
@@ -309,7 +296,7 @@ void QGocatorWidget::applyDiscoveredDevices(const std::vector<Gocator::DeviceInf
 
     for (const auto& device : devices)
     {
-        QString text = QString::fromStdString(formatDeviceName(device.model, device.serial, device.address, device.isVirtual));
+        QString text = QString::fromStdString(Gocator::formatDeviceName(device.model, device.serial, device.address, device.isVirtual));
         _ipCombo->addItem(text, QString::fromStdString(device.address));
     }
 
@@ -328,28 +315,46 @@ void QGocatorWidget::applyDiscoveredDevices(const std::vector<Gocator::DeviceInf
 void QGocatorWidget::onConnectToggled(bool toggled)
 {
     if (!_gocator || _shuttingDown) return;
+    if (!_gocator->tryBeginControl()) {
+        QSignalBlocker blocker(_toolConnect);
+        _toolConnect->setChecked(_gocator->isOpened());
+        setStatus(QStringLiteral("Another device operation is active"));
+        return;
+    }
+    _localControlActive = true;
 
     setConnectionOperationActive(true);
-    if (toggled)
-    {
-        setStatus(QStringLiteral("Connecting"));
-        std::string ip = ipAddress().toStdString();
-        auto future = QtConcurrent::run([this, ip]() {
-            if (!_gocator) return false;
-            return _gocator->open(ip);
-        });
-        _connectWatcher.setFuture(future);
-        updateStatusLabel();
+    try {
+        if (toggled)
+        {
+            setStatus(QStringLiteral("Connecting"));
+            std::string ip = ipAddress().toStdString();
+            auto future = QtConcurrent::run([this, ip]() {
+                if (!_gocator) return false;
+                return _gocator->open(ip);
+            });
+            _connectWatcher.setFuture(future);
+        }
+        else
+        {
+            auto future = QtConcurrent::run([this]() {
+                if (_gocator) _gocator->close();
+                return false;
+            });
+            _connectWatcher.setFuture(future);
+        }
+    } catch (...) {
+        _gocator->endControl();
+        _localControlActive = false;
+        setStatus(QStringLiteral("Connection operation could not start"));
+        {
+            QSignalBlocker blocker(_toolConnect);
+            _toolConnect->setChecked(_gocator->isOpened());
+        }
+        setConnectionOperationActive(false);
+        return;
     }
-    else
-    {
-        auto future = QtConcurrent::run([this]() {
-            if (_gocator) _gocator->close();
-            return false;
-        });
-        _connectWatcher.setFuture(future);
-        updateStatusLabel();
-    }
+    updateStatusLabel();
 }
 
 void QGocatorWidget::onGrabOneClicked()
@@ -397,6 +402,30 @@ void QGocatorWidget::handleStatusChanged(Gocator::Status status, bool on)
         QSignalBlocker blocker(_toolConnect);
         _toolConnect->setChecked(on);
     }
+    else if (status == Gocator::ControlStatus)
+    {
+        if (_localControlActive) return;
+        setExternalControlActive(_gocator && _gocator->controlBusy());
+    }
+}
+
+void QGocatorWidget::setExternalControlActive(bool active)
+{
+    if (_shuttingDown || _externalControlActive == active) return;
+    _externalControlActive = active;
+    if (active)
+    {
+        setConnectionOperationActive(true);
+        _toolGrabOne->setEnabled(false);
+        _toolGrabLive->setEnabled(false);
+        setFeatureEditorsEnabled(false);
+        setStatus(QStringLiteral("Device control is active"));
+        return;
+    }
+
+    setConnectionOperationActive(false);
+    setRunningState(_grabbing);
+    updateStatusLabel();
 }
 
 void QGocatorWidget::setConnectionOperationActive(bool active)
@@ -446,7 +475,7 @@ void QGocatorWidget::applyConnectionState(bool opened)
             if (!devInfo.address.empty())
             {
                 QString ip = QString::fromStdString(devInfo.address);
-                QString text = QString::fromStdString(formatDeviceName(devInfo.model, devInfo.serial, devInfo.address, devInfo.isVirtual));
+                QString text = QString::fromStdString(Gocator::formatDeviceName(devInfo.model, devInfo.serial, devInfo.address, devInfo.isVirtual));
 
                 int index = _ipCombo->findData(ip);
                 if (index >= 0)
@@ -472,6 +501,15 @@ void QGocatorWidget::applyConnectionState(bool opened)
         updateGrabState(false);
         setRunningState(false);
         clearFeatures();
+    }
+
+    if (_externalControlActive)
+    {
+        _ipCombo->setEnabled(false);
+        _toolRefresh->setEnabled(false);
+        _toolConnect->setEnabled(false);
+        _toolGrabOne->setEnabled(false);
+        _toolGrabLive->setEnabled(false);
     }
 }
 
@@ -1118,7 +1156,7 @@ QGocatorWidget::FeatureDataResult QGocatorWidget::readFeatureData(bool rebuild) 
         result.systemSchema = QString::fromStdString(_gocator->getParametersSchema(Gocator::ParameterTarget::System));
         const auto info = _gocator->getConnectedDeviceInfo();
         result.deviceLabel = QString::fromStdString(info.address.empty() ? _gocator->getConnectedAddress()
-            : formatDeviceName(info.model, info.serial, info.address, info.isVirtual));
+            : Gocator::formatDeviceName(info.model, info.serial, info.address, info.isVirtual));
     }
     return result;
 }

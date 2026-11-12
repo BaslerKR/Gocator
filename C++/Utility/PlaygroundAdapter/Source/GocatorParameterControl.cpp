@@ -60,26 +60,26 @@ DeviceParameterResult GocatorSourceController::requestParameters(InventoryComple
     });
 }
 
-DeviceParameterResult GocatorSourceController::requestReadParameter(DeviceParameterTarget target, Completion completion)
+DeviceParameterResult GocatorSourceController::requestReadParameter(DeviceParameterTarget target, ParameterCompletion completion)
 {
     return parameterWork(std::move(target), {}, {}, std::move(completion));
 }
 
 DeviceParameterResult GocatorSourceController::requestWriteParameter(DeviceParameterTarget target,
-    DeviceParameterValue value, std::optional<std::uint64_t> revision, Completion completion)
+    DeviceParameterValue value, std::optional<std::uint64_t> revision, ParameterCompletion completion)
 {
     return parameterWork(std::move(target), std::move(value), revision, std::move(completion));
 }
 
 DeviceParameterResult GocatorSourceController::requestExecuteParameter(DeviceParameterTarget,
-    std::optional<std::uint64_t>, Completion completion)
+    std::optional<std::uint64_t>, ParameterCompletion completion)
 {
     if (!completion) return failure(Error::InvalidArgument, "A completion is required.");
     return failure(Error::Unsupported, "The supported GoSystem controls expose no executable command or software trigger.");
 }
 
 DeviceParameterResult GocatorSourceController::parameterWork(DeviceParameterTarget target,
-    std::optional<DeviceParameterValue> value, std::optional<std::uint64_t> revision, Completion completion)
+    std::optional<DeviceParameterValue> value, std::optional<std::uint64_t> revision, ParameterCompletion completion)
 {
     if (!completion) return failure(Error::InvalidArgument, "A completion is required.");
     for (const auto* field : {&target.connectionId, &target.scope, &target.name})

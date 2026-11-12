@@ -6,6 +6,7 @@
 #include <GoPxLSdk/GoSystem.h>
 
 #include <atomic>
+#include <cctype>
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
@@ -122,6 +123,48 @@ constexpr const char* EXPOSURE_PARAMETER_PATH = "/parameters/exposureSettings/si
 
 } // namespace
 
+std::string Gocator::formatDeviceName(const std::string& model, const std::string& serial,
+    const std::string& address, bool isVirtual)
+{
+    if (model.empty() || model == "Unknown")
+    {
+        if (isVirtual)
+        {
+            return "Unknown (Virtual) - " + address;
+        }
+        return "Unknown - " + address;
+    }
+
+    std::string displayName = model;
+    bool replaced = false;
+    for (const std::string& target : {"Gocator ", "gocator ", "Gocator", "gocator"})
+    {
+        size_t pos = displayName.find(target);
+        if (pos != std::string::npos)
+        {
+            displayName.replace(pos, target.length(), "G");
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced && !displayName.empty() && std::isdigit(static_cast<unsigned char>(displayName[0])))
+    {
+        displayName = "G" + displayName;
+    }
+
+    std::string serialStr = serial;
+    if (isVirtual)
+    {
+        serialStr = "Virtual";
+    }
+    else if (serialStr.empty() || serialStr == "0")
+    {
+        serialStr = "0";
+    }
+
+    return displayName + " (" + serialStr + ") - " + address;
+}
+
 struct Gocator::Impl
 {
     mutable std::recursive_mutex controlMutex;
@@ -133,6 +176,11 @@ struct Gocator::Impl
     std::atomic<bool> isOpened{false};
     std::atomic<bool> isGrabbing{false};
     std::atomic<bool> stopRequested{false};
+    std::atomic<bool> controlBusy{false};
+    mutable std::mutex devicesMutex;
+    std::vector<Gocator::DeviceInfo> cachedDevices;
+    mutable std::mutex snapshotMutex;
+    Gocator::ConnectionSnapshot snapshot;
 
     std::string getScannerPath() const
     {
@@ -581,13 +629,56 @@ bool Gocator::isOpened() const
     return _impl->isOpened.load();
 }
 
+Gocator::ConnectionSnapshot Gocator::connectionSnapshot() const
+{
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
+    return {_impl->isOpened.load(std::memory_order_acquire), _impl->connectionGeneration, _impl->ipAddress};
+}
+
 void Gocator::close()
 {
     _impl->close();
 }
 
-std::vector<Gocator::DeviceInfo> Gocator::discoverDevices()
+std::vector<Gocator::DeviceInfo> Gocator::cachedDevices() const
 {
+    std::lock_guard<std::mutex> lock(_impl->devicesMutex);
+    return _impl->cachedDevices;
+}
+
+void Gocator::setCachedDevices(std::vector<DeviceInfo> devices)
+{
+    std::lock_guard<std::mutex> lock(_impl->devicesMutex);
+    _impl->cachedDevices = std::move(devices);
+}
+
+bool Gocator::tryBeginControl()
+{
+    bool expected = false;
+    if (!_impl->controlBusy.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+    {
+        return false;
+    }
+    _impl->notifyStatus(ControlStatus, true);
+    return true;
+}
+
+void Gocator::endControl()
+{
+    if (_impl->controlBusy.exchange(false, std::memory_order_acq_rel))
+    {
+        _impl->notifyStatus(ControlStatus, false);
+    }
+}
+
+bool Gocator::controlBusy() const noexcept
+{
+    return _impl->controlBusy.load(std::memory_order_acquire);
+}
+
+std::vector<Gocator::DeviceInfo> Gocator::discoverDevices(std::string* error)
+{
+    if (error) error->clear();
     std::vector<Gocator::DeviceInfo> result;
     try
     {
@@ -638,13 +729,16 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices()
             result.push_back({d.address, d.deviceModel, std::to_string(d.serialNumber), isVirt});
         }
         syslog("Gocator discovery completed: " + std::to_string(result.size()) + " device(s) available.");
+        setCachedDevices(result);
     }
     catch (const std::exception& e)
     {
+        if (error) *error = e.what();
         syslog("Discovery failed: " + std::string(e.what()), true);
     }
     catch (...)
     {
+        if (error) *error = "Unexpected discovery failure.";
         syslog("Discovery failed with unknown error", true);
     }
     return result;

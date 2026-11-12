@@ -372,13 +372,31 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
             add_test(NAME GocatorParameterControlTests COMMAND GocatorParameterControlTests)
             set_tests_properties(GocatorParameterControlTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         endif()
+
+        add_executable(GocatorConnectionControlTests
+            tests/GocatorConnectionControlTests.cpp
+            Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
+            Utility/PlaygroundAdapter/Source/GocatorSourceController.h
+            Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp)
+        set_target_properties(GocatorConnectionControlTests PROPERTIES AUTOMOC ON)
+        target_link_libraries(GocatorConnectionControlTests PRIVATE
+            Playground::DevicePlugin Gocator::QtWidget Gocator::PlaygroundAdapter Qt6::Test Qt6::Concurrent)
+        if(WIN32)
+            add_test(NAME GocatorConnectionControlTests COMMAND ${CMAKE_COMMAND} -E env
+                "QT_QPA_PLATFORM=offscreen"
+                "PATH=${GOPXL_SDK_DIR}/lib/${gopxl_platform_dir};$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+                $<TARGET_FILE:GocatorConnectionControlTests>)
+        else()
+            add_test(NAME GocatorConnectionControlTests COMMAND GocatorConnectionControlTests)
+            set_tests_properties(GocatorConnectionControlTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        endif()
     endif()
 
     message(STATUS "[Gocator] GocatorPlugin enabled.")
 endif()
 
 # Keep contract assertions active in Release validation.
-foreach(module_test IN ITEMS QGocatorWidgetTests GocatorGraphicsFrameAdapterTests GocatorParameterControlTests)
+foreach(module_test IN ITEMS QGocatorWidgetTests GocatorGraphicsFrameAdapterTests GocatorParameterControlTests GocatorConnectionControlTests)
     if(TARGET ${module_test})
         target_compile_options(${module_test} PRIVATE
             $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>

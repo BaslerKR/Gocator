@@ -91,6 +91,8 @@ protected:
 
 private:
     void setConnectionOperationActive(bool active);
+    /** @brief Disables controls while an external lifecycle operation owns the shared gate. */
+    void setExternalControlActive(bool active);
     void applyConnectionState(bool opened);
 
     /** Rebuilds scanner and sensor feature editors from live resource schemas. */
@@ -137,6 +139,8 @@ private:
     Gocator *_gocator = nullptr;
     Gocator::CallbackId _statusCallbackId = 0;
     bool _shuttingDown = false;
+    bool _localControlActive = false;
+    bool _externalControlActive = false;
 
 
     QMap<QWidget*, FeatureMapping> _widgetToFeatureMap;

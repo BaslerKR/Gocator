@@ -32,7 +32,8 @@ public:
 
     enum Status {
         GrabbingStatus,
-        ConnectionStatus
+        ConnectionStatus,
+        ControlStatus
     };
 
     struct DeviceInfo {
@@ -41,6 +42,17 @@ public:
         std::string serial;
         bool isVirtual = false;
     };
+
+    /** @brief Copies the logical connection and its generation under one lock. */
+    struct ConnectionSnapshot {
+        bool opened = false;
+        std::uint64_t generation = 0;
+        std::string address;
+    };
+
+    /** @brief Formats the stable human-readable target label shared by UI and API surfaces. */
+    static std::string formatDeviceName(const std::string& model, const std::string& serial,
+        const std::string& address, bool isVirtual = false);
 
     enum ScanMode {
         ProfileMode = 0,
@@ -85,11 +97,23 @@ public:
     bool deregisterGrabCallback(CallbackId id);
     void clearGrabCallbacks();
 
-    std::vector<DeviceInfo> discoverDevices();
+    std::vector<DeviceInfo> discoverDevices(std::string* error = nullptr);
+
+    /** @brief Copies the cached discovery result without a network refresh. */
+    std::vector<DeviceInfo> cachedDevices() const;
+    /** @brief Replaces the cached discovery result, normally from an initial session discovery. */
+    void setCachedDevices(std::vector<DeviceInfo> devices);
 
     bool open(const std::string& ipAddress);
     bool isOpened() const;
+    /** @brief Copies the connection state and generation for lifecycle consumers. */
+    ConnectionSnapshot connectionSnapshot() const;
     void close();
+
+    /** @brief Serializes discovery, connect and disconnect across GUI and API surfaces. */
+    bool tryBeginControl();
+    void endControl();
+    bool controlBusy() const noexcept;
 
     void configure(double scanLengthMm, ScanMode mode, bool intensityEnabled, bool uniformSpacingEnabled, int exposureUs);
 
