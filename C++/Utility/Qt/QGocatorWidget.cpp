@@ -427,6 +427,12 @@ void QGocatorWidget::setExternalControlActive(bool active)
         return;
     }
 
+    if (_featureRefreshActive || _parameterUpdateActive)
+    {
+        updateStatusLabel();
+        return;
+    }
+
     setConnectionOperationActive(false);
     setRunningState(_grabbing);
     updateStatusLabel();

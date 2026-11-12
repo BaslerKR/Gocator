@@ -90,6 +90,7 @@ protected:
     };
 
 private:
+    friend class GocatorConnectionControlTests;
     void setConnectionOperationActive(bool active);
     /** @brief Disables controls while an external lifecycle operation owns the shared gate. */
     void setExternalControlActive(bool active);

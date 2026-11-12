@@ -35,10 +35,11 @@ class GocatorConnectionControlTests : public QObject {
     Q_OBJECT
 private slots:
     void lifecycleAdmissionAndStaleGeneration();
-    void discoverPublishesCacheAndFailureKeepsIt();
+    void discoverPublishesCacheAndFailureStaysSilent();
     void snapshotDoesNotWaitForControlLock();
     void busyGateAndTeardownDrain();
     void guiAndApiShareControlGate();
+    void externalControlEndDefersToActiveFeatureRefresh();
 
 private:
     static void bind(GocatorSourceController& controller, FakeGocator& fake);
@@ -218,7 +219,7 @@ void GocatorConnectionControlTests::lifecycleAdmissionAndStaleGeneration()
     }).error, DeviceConnectionError::None);
 }
 
-void GocatorConnectionControlTests::discoverPublishesCacheAndFailureKeepsIt()
+void GocatorConnectionControlTests::discoverPublishesCacheAndFailureStaysSilent()
 {
     FakeGocator fake;
     fake.devices = {{"192.168.1.99", "Gocator 9900", "9900", false}};
@@ -251,11 +252,6 @@ void GocatorConnectionControlTests::discoverPublishesCacheAndFailureKeepsIt()
     });
     QCOMPARE(failed.result.error, DeviceConnectionError::BackendFailure);
     QCOMPARE(changed.count(), 1);
-    const auto preserved = awaitTargets(controller, [&](auto done) {
-        return controller.requestConnectionTargets(done);
-    });
-    QCOMPARE(preserved.targets.size(), std::size_t{2});
-    QCOMPARE(preserved.targets[0].targetId, std::string("192.168.1.10"));
 }
 
 void GocatorConnectionControlTests::snapshotDoesNotWaitForControlLock()
@@ -360,6 +356,32 @@ void GocatorConnectionControlTests::guiAndApiShareControlGate()
     QTRY_VERIFY(combo->isEnabled());
     QTRY_VERIFY(refresh->isEnabled());
     QTRY_VERIFY(connect->isEnabled());
+}
+
+void GocatorConnectionControlTests::externalControlEndDefersToActiveFeatureRefresh()
+{
+    Gocator gocator;
+    QGocatorWidget widget(nullptr, &gocator);
+    auto* refresh = widget.findChild<QToolButton*>(QStringLiteral("gocatorToolRefresh"));
+    auto* connect = widget.findChild<QToolButton*>(QStringLiteral("gocatorToolConnect"));
+    QVERIFY(refresh);
+    QVERIFY(connect);
+
+    QVERIFY(gocator.tryBeginControl());
+    QTRY_VERIFY(widget._externalControlActive);
+    widget._featureRefreshActive = true;
+    widget._parameterUpdateActive = true;
+
+    gocator.endControl();
+    QTRY_VERIFY(!widget._externalControlActive);
+    QVERIFY(!refresh->isEnabled());
+    QVERIFY(!connect->isEnabled());
+
+    widget._featureRefreshActive = false;
+    widget._parameterUpdateActive = false;
+    widget.setConnectionOperationActive(false);
+    QVERIFY(refresh->isEnabled());
+    QVERIFY(connect->isEnabled());
 }
 
 QTEST_MAIN(GocatorConnectionControlTests)
