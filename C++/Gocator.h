@@ -164,6 +164,10 @@ public:
     static void syslog(const std::string& message, bool warning = false);
 
 private:
+    friend class GocatorConnectionControlTests;
+    /** @brief Test seam: holds the connection control lock while the callbacks run. */
+    void holdControlForTest(const std::function<void()>& entered, const std::function<void()>& release);
+
     struct Impl;
     std::unique_ptr<Impl> _impl;
 };

@@ -274,6 +274,10 @@ struct Gocator::Impl
 
             ipAddress = connection->config().address;
             ++connectionGeneration;
+            {
+                std::lock_guard<std::mutex> snapshotLock(snapshotMutex);
+                snapshot = {true, connectionGeneration, ipAddress};
+            }
             isOpened.store(true);
             Gocator::syslog("Gocator connected: address=" + ipAddress
                 + " gdpPort=" + std::to_string(connection->gdpPort()) + ".");
@@ -315,9 +319,18 @@ struct Gocator::Impl
 
         if (isOpened.load())
         {
+            {
+                std::lock_guard<std::mutex> snapshotLock(snapshotMutex);
+                snapshot = {};
+            }
             isOpened.store(false);
             notifyStatus(ConnectionStatus, false);
             Gocator::syslog("Gocator connection closed.");
+        }
+        else
+        {
+            std::lock_guard<std::mutex> snapshotLock(snapshotMutex);
+            snapshot = {};
         }
     }
 
@@ -631,8 +644,8 @@ bool Gocator::isOpened() const
 
 Gocator::ConnectionSnapshot Gocator::connectionSnapshot() const
 {
-    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
-    return {_impl->isOpened.load(std::memory_order_acquire), _impl->connectionGeneration, _impl->ipAddress};
+    std::lock_guard<std::mutex> lock(_impl->snapshotMutex);
+    return _impl->snapshot;
 }
 
 void Gocator::close()
@@ -674,6 +687,13 @@ void Gocator::endControl()
 bool Gocator::controlBusy() const noexcept
 {
     return _impl->controlBusy.load(std::memory_order_acquire);
+}
+
+void Gocator::holdControlForTest(const std::function<void()>& entered, const std::function<void()>& release)
+{
+    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
+    if (entered) entered();
+    if (release) release();
 }
 
 std::vector<Gocator::DeviceInfo> Gocator::discoverDevices(std::string* error)

@@ -3,6 +3,7 @@
 #include <QComboBox>
 #include <QToolButton>
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <stdexcept>
 #include <string>
@@ -25,6 +26,7 @@ struct FakeGocator {
     int opens = 0;
     int closes = 0;
     std::function<void()> beforeDiscover;
+    bool failDiscover = false;
 };
 
 } // namespace
@@ -33,6 +35,8 @@ class GocatorConnectionControlTests : public QObject {
     Q_OBJECT
 private slots:
     void lifecycleAdmissionAndStaleGeneration();
+    void discoverPublishesCacheAndFailureKeepsIt();
+    void snapshotDoesNotWaitForControlLock();
     void busyGateAndTeardownDrain();
     void guiAndApiShareControlGate();
 
@@ -48,6 +52,10 @@ void GocatorConnectionControlTests::bind(GocatorSourceController& controller, Fa
     controller._lifecycle.diagnostics = [&fake] { return fake.diagnostics; };
     controller._lifecycle.discover = [&fake](std::string* error) {
         if (fake.beforeDiscover) fake.beforeDiscover();
+        if (fake.failDiscover) {
+            if (error) *error = "fake discovery failure";
+            return fake.devices;
+        }
         fake.devices = {
             {"192.168.1.10", "Gocator 2500", "12345", false},
             {"192.168.1.11", "Gocator 2600", "0", true},
@@ -210,6 +218,69 @@ void GocatorConnectionControlTests::lifecycleAdmissionAndStaleGeneration()
     }).error, DeviceConnectionError::None);
 }
 
+void GocatorConnectionControlTests::discoverPublishesCacheAndFailureKeepsIt()
+{
+    FakeGocator fake;
+    fake.devices = {{"192.168.1.99", "Gocator 9900", "9900", false}};
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    QSignalSpy changed(&controller, &GocatorSourceController::inventoryChanged);
+
+    const auto before = awaitTargets(controller, [&](auto done) {
+        return controller.requestConnectionTargets(done);
+    });
+    QCOMPARE(before.targets.size(), std::size_t{1});
+    QCOMPARE(before.targets[0].targetId, std::string("192.168.1.99"));
+
+    const auto discovered = awaitTargets(controller, [&](auto done) {
+        return controller.requestDiscover(done);
+    });
+    QCOMPARE(discovered.result.error, DeviceConnectionError::None);
+    QCOMPARE(discovered.targets.size(), std::size_t{2});
+    QTRY_COMPARE(changed.count(), 1);
+
+    const auto refreshed = awaitTargets(controller, [&](auto done) {
+        return controller.requestConnectionTargets(done);
+    });
+    QCOMPARE(refreshed.targets.size(), std::size_t{2});
+    QCOMPARE(refreshed.targets[0].targetId, std::string("192.168.1.10"));
+
+    fake.failDiscover = true;
+    const auto failed = awaitTargets(controller, [&](auto done) {
+        return controller.requestDiscover(done);
+    });
+    QCOMPARE(failed.result.error, DeviceConnectionError::BackendFailure);
+    QCOMPARE(changed.count(), 1);
+    const auto preserved = awaitTargets(controller, [&](auto done) {
+        return controller.requestConnectionTargets(done);
+    });
+    QCOMPARE(preserved.targets.size(), std::size_t{2});
+    QCOMPARE(preserved.targets[0].targetId, std::string("192.168.1.10"));
+}
+
+void GocatorConnectionControlTests::snapshotDoesNotWaitForControlLock()
+{
+    Gocator gocator;
+    auto entered = std::make_shared<std::promise<void>>();
+    auto release = std::make_shared<std::promise<void>>();
+    auto enteredFuture = entered->get_future();
+    auto releaseFuture = release->get_future().share();
+    auto holder = std::async(std::launch::async, [&] {
+        gocator.holdControlForTest([&] { entered->set_value(); }, [&] { releaseFuture.wait(); });
+    });
+
+    const bool lockHeld = enteredFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    auto snapshotFuture = std::async(std::launch::async, [&gocator] { return gocator.connectionSnapshot(); });
+    const auto snapshotStatus = snapshotFuture.wait_for(std::chrono::seconds(2));
+    release->set_value();
+    holder.wait();
+    const auto snapshot = snapshotFuture.get();
+
+    QVERIFY(lockHeld);
+    QCOMPARE(snapshotStatus, std::future_status::ready);
+    QVERIFY(!snapshot.opened);
+}
+
 void GocatorConnectionControlTests::busyGateAndTeardownDrain()
 {
     FakeGocator fake;
@@ -261,13 +332,20 @@ void GocatorConnectionControlTests::guiAndApiShareControlGate()
     GocatorSourceController controller(&gocator);
 
     auto* combo = widget.findChild<QComboBox*>(QStringLiteral("gocatorIpCombo"));
+    auto* refresh = widget.findChild<QToolButton*>(QStringLiteral("gocatorToolRefresh"));
     auto* connect = widget.findChild<QToolButton*>(QStringLiteral("gocatorToolConnect"));
     QVERIFY(combo);
+    QVERIFY(refresh);
     QVERIFY(connect);
 
     QVERIFY(gocator.tryBeginControl());
     QTRY_VERIFY(!combo->isEnabled());
+    QTRY_VERIFY(!refresh->isEnabled());
     QTRY_VERIFY(!connect->isEnabled());
+
+    widget.setDiscoveredDevices({{"192.168.1.10", "Gocator 2500", "12345", false}});
+    QVERIFY(!refresh->isEnabled());
+    QVERIFY(!connect->isEnabled());
 
     int completions = 0;
     QCOMPARE(controller.requestDiscover([&](auto) { ++completions; }).error,
@@ -280,6 +358,7 @@ void GocatorConnectionControlTests::guiAndApiShareControlGate()
 
     gocator.endControl();
     QTRY_VERIFY(combo->isEnabled());
+    QTRY_VERIFY(refresh->isEnabled());
     QTRY_VERIFY(connect->isEnabled());
 }
 

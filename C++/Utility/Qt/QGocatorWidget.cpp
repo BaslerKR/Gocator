@@ -163,7 +163,7 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
         setConnectionOperationActive(false);
         setRunningState(_grabbing);
         updateStatusLabel();
-        updateFeatureValues();
+        if (!_externalControlActive) updateFeatureValues();
     });
 
     connect(&_featureDataWatcher, &QFutureWatcher<FeatureDataResult>::finished, this, [this]() {
@@ -179,6 +179,10 @@ QGocatorWidget::QGocatorWidget(QWidget *parent, Gocator *gocator)
         const bool pending = _featureRefreshPending;
         const bool rebuild = _featureRebuildPending;
         _featureRefreshPending = _featureRebuildPending = false;
+        if (_externalControlActive) {
+            updateStatusLabel();
+            return;
+        }
         if (pending) {
             fetchFeatureData(rebuild);
             if (_featureRefreshActive) return;
@@ -289,8 +293,8 @@ void QGocatorWidget::applyDiscoveredDevices(const std::vector<Gocator::DeviceInf
     {
         setStatus(QStringLiteral("No devices found"));
         _ipCombo->setEditText(currentAddress.isEmpty() ? QStringLiteral("192.168.1.10") : currentAddress);
-        _toolRefresh->setEnabled(true);
-        _toolConnect->setEnabled(true);
+        _toolRefresh->setEnabled(!_externalControlActive);
+        _toolConnect->setEnabled(!_externalControlActive);
         return;
     }
 
@@ -308,8 +312,8 @@ void QGocatorWidget::applyDiscoveredDevices(const std::vector<Gocator::DeviceInf
     }
 
     setStatus(QStringLiteral("Discovered %1 devices").arg(devices.size()));
-    _toolRefresh->setEnabled(true);
-    _toolConnect->setEnabled(true);
+    _toolRefresh->setEnabled(!_externalControlActive);
+    _toolConnect->setEnabled(!_externalControlActive);
 }
 
 void QGocatorWidget::onConnectToggled(bool toggled)
@@ -359,7 +363,7 @@ void QGocatorWidget::onConnectToggled(bool toggled)
 
 void QGocatorWidget::onGrabOneClicked()
 {
-    if (!_gocator || _shuttingDown) return;
+    if (!_gocator || _shuttingDown || _externalControlActive) return;
     logMessage(tr("Starting single grab..."), false);
     _gocator->configure(scanLengthMm(), scanMode(), intensityEnabled(), uniformSpacingEnabled(), exposureUs());
     _gocator->grab(1);
@@ -367,7 +371,7 @@ void QGocatorWidget::onGrabOneClicked()
 
 void QGocatorWidget::onGrabLiveToggled(bool toggled)
 {
-    if (!_gocator || _shuttingDown) return;
+    if (!_gocator || _shuttingDown || _externalControlActive) return;
 
     if (toggled)
     {
@@ -439,6 +443,7 @@ void QGocatorWidget::setConnectionOperationActive(bool active)
         return;
     }
 
+    if (_externalControlActive) return;
     const bool opened = _gocator && _gocator->isOpened();
     _ipCombo->setEnabled(!opened);
     _toolRefresh->setEnabled(!opened);
@@ -629,6 +634,13 @@ void QGocatorWidget::updateStatusLabel()
 
 void QGocatorWidget::setRunningState(bool running)
 {
+    if (_externalControlActive)
+    {
+        _toolGrabOne->setEnabled(false);
+        _toolGrabLive->setEnabled(false);
+        setFeatureEditorsEnabled(false);
+        return;
+    }
     _toolGrabOne->setEnabled(_gocator && _gocator->isOpened() && !running);
     _toolGrabLive->setEnabled(_gocator && _gocator->isOpened());
 
