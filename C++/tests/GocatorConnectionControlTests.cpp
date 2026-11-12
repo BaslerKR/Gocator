@@ -1,6 +1,8 @@
 #include <QtTest/QtTest>
 
 #include <QComboBox>
+#include <QCoreApplication>
+#include <QRegularExpression>
 #include <QToolButton>
 #include <atomic>
 #include <chrono>
@@ -406,15 +408,19 @@ void GocatorConnectionControlTests::externalControlEndWaitsForFeatureWatcher()
     QVERIFY(!refresh->isEnabled());
     QVERIFY(!connect->isEnabled());
 
+    QTest::ignoreMessage(QtInfoMsg, QRegularExpression(QStringLiteral("Device control is active")));
     QVERIFY(gocator.tryBeginControl());
-    QTRY_VERIFY(!connect->isEnabled());
+    QCoreApplication::processEvents();
+    QVERIFY(!connect->isEnabled());
+
     gocator.endControl();
-    QTRY_VERIFY(!connect->isEnabled());
-    QVERIFY(!refresh->isEnabled());
+    QCoreApplication::processEvents();
+    const bool deferred = !connect->isEnabled() && !refresh->isEnabled();
 
     release.release();
     QTRY_VERIFY(connect->isEnabled());
     QTRY_VERIFY(refresh->isEnabled());
+    QVERIFY(deferred);
 }
 
 QTEST_MAIN(GocatorConnectionControlTests)
