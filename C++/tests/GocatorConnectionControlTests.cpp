@@ -29,6 +29,38 @@ struct FakeGocator {
     bool failDiscover = false;
 };
 
+class FeatureRefreshWidget final : public QGocatorWidget {
+public:
+    using QGocatorWidget::QGocatorWidget;
+    using QGocatorWidget::fetchFeatureData;
+
+    void blockReads(std::shared_future<void> gate) { _gate = std::move(gate); }
+
+protected:
+    bool featureDataAvailable() const override { return true; }
+    FeatureDataResult readFeatureData(bool) const override {
+        if (_gate.valid()) _gate.wait();
+        FeatureDataResult result;
+        result.scannerData = QStringLiteral("{}");
+        result.sensorData = QStringLiteral("{}");
+        result.systemData = QStringLiteral("{}");
+        return result;
+    }
+
+private:
+    std::shared_future<void> _gate;
+};
+
+struct GateRelease {
+    std::shared_ptr<std::promise<void>> gate;
+    std::atomic<bool> released{false};
+
+    void release() {
+        if (!released.exchange(true)) gate->set_value();
+    }
+    ~GateRelease() { release(); }
+};
+
 } // namespace
 
 class GocatorConnectionControlTests : public QObject {
@@ -39,7 +71,7 @@ private slots:
     void snapshotDoesNotWaitForControlLock();
     void busyGateAndTeardownDrain();
     void guiAndApiShareControlGate();
-    void externalControlEndDefersToActiveFeatureRefresh();
+    void externalControlEndWaitsForFeatureWatcher();
 
 private:
     static void bind(GocatorSourceController& controller, FakeGocator& fake);
@@ -358,30 +390,31 @@ void GocatorConnectionControlTests::guiAndApiShareControlGate()
     QTRY_VERIFY(connect->isEnabled());
 }
 
-void GocatorConnectionControlTests::externalControlEndDefersToActiveFeatureRefresh()
+void GocatorConnectionControlTests::externalControlEndWaitsForFeatureWatcher()
 {
     Gocator gocator;
-    QGocatorWidget widget(nullptr, &gocator);
+    FeatureRefreshWidget widget(nullptr, &gocator);
     auto* refresh = widget.findChild<QToolButton*>(QStringLiteral("gocatorToolRefresh"));
     auto* connect = widget.findChild<QToolButton*>(QStringLiteral("gocatorToolConnect"));
     QVERIFY(refresh);
     QVERIFY(connect);
 
-    QVERIFY(gocator.tryBeginControl());
-    QTRY_VERIFY(widget._externalControlActive);
-    widget._featureRefreshActive = true;
-    widget._parameterUpdateActive = true;
-
-    gocator.endControl();
-    QTRY_VERIFY(!widget._externalControlActive);
+    auto gate = std::make_shared<std::promise<void>>();
+    GateRelease release{gate};
+    widget.blockReads(gate->get_future().share());
+    widget.fetchFeatureData(false);
     QVERIFY(!refresh->isEnabled());
     QVERIFY(!connect->isEnabled());
 
-    widget._featureRefreshActive = false;
-    widget._parameterUpdateActive = false;
-    widget.setConnectionOperationActive(false);
-    QVERIFY(refresh->isEnabled());
-    QVERIFY(connect->isEnabled());
+    QVERIFY(gocator.tryBeginControl());
+    QTRY_VERIFY(!connect->isEnabled());
+    gocator.endControl();
+    QTRY_VERIFY(!connect->isEnabled());
+    QVERIFY(!refresh->isEnabled());
+
+    release.release();
+    QTRY_VERIFY(connect->isEnabled());
+    QTRY_VERIFY(refresh->isEnabled());
 }
 
 QTEST_MAIN(GocatorConnectionControlTests)
