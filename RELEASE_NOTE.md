@@ -1,17 +1,8 @@
-## v0.2.1 (2026-10-20)
-
-- Use the neutral LMI artwork for the package icon.
-
-- Use the shared connect and disconnect artwork for connection controls.
-
-- Use the shared refresh, single-grab, and live glyphs on the device toolbar.
-
-- Publish the independently built device package with installed SDK validation.
-
-- Document explicit Release-only installed SDK configuration.
-- Build the standalone device plugin against an installed consumer SDK and stage its module-owned runtime package.
-
 ## Unreleased
+
+## v0.3.0 (2026-11-13)
+
+- Require Playground 0.6.6 or later; this package uses the device plugin interface introduced in that release.
 
 - Implement the standard `IDeviceConnectionControl` lifecycle over the cached discovery catalog and a shared GUI/API control gate; discovery, connect and disconnect are callable while Single and Live remain unavailable in favor of `source.start`/`source.stop`. Stale connection ids and concurrent GUI work are refused before effects.
 
@@ -27,10 +18,22 @@
 - Treat an empty Gocator discovery as informational; a missing camera no longer appears as a System Logs warning.
 - Take the binary display name from the package definition (`Gocator`).
 
+## v0.2.1 (2026-10-20)
+
+- Use the neutral LMI artwork for the package icon.
+
+- Use the shared connect and disconnect artwork for connection controls.
+
+- Use the shared refresh, single-grab, and live glyphs on the device toolbar.
+
+- Publish the independently built device package with installed SDK validation.
+
+- Document explicit Release-only installed SDK configuration.
+- Build the standalone device plugin against an installed consumer SDK and stage its module-owned runtime package.
+
 ## v0.2.2 (2026-10-29)
 
 - Show the next Live grab command with cameras/stop artwork in all pointer and focus states, and keep its tooltip and accessible name synchronized with acquisition state.
-
 
 - Connect icons name the current state (`disconnected`/`connect`); a consumer theme can preview the other state on hover.
 
