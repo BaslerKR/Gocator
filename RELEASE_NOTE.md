@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Deliver 3D range frames through the GraphicsEngine range writer into Playground shared frame storage. A controller that provides storage gets every range channel stored once in its slot; an empty storage result drops the frame instead of copying it elsewhere.
+
 ## v0.3.0 (2026-11-13)
 
 - Require Playground 0.6.6 or later; this package uses the device plugin interface introduced in that release.

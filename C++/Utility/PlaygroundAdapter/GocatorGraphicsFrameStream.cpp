@@ -34,6 +34,11 @@ public:
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
 
+    void setFrameStorage(GraphicsImageStorage storage)
+    {
+        _adapter.setFrameStorage(std::move(storage));
+    }
+
 private:
     Gocator* _gocator = nullptr;
     GraphicsFrameCallback _callback;
@@ -96,3 +101,8 @@ GocatorGraphicsFrameStream::GocatorGraphicsFrameStream(
 }
 
 GocatorGraphicsFrameStream::~GocatorGraphicsFrameStream() = default;
+
+void GocatorGraphicsFrameStream::setFrameStorage(GraphicsImageStorage storage)
+{
+    if (_impl) _impl->setFrameStorage(std::move(storage));
+}

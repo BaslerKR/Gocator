@@ -1,5 +1,8 @@
 #include "GocatorDataSetGraphicsFrameAdapter.h"
 
+#include "GocatorRangeConversion.h"
+#include "graphics/data/GraphicsRangeFrameWriter.h"
+
 #include <GoPxLSdk/GoDataSet.h>
 #include <GoPxLSdk/GoGdpMsg/GoGdpMsgDef.h>
 #include <GoPxLSdk/GoGdpMsg/GoGdpProfilePointCloud.h>
@@ -108,24 +111,21 @@ void applyCommonFrameFields(RangeFrame& frame,
     return 0U;
 }
 
-[[nodiscard]] std::uint8_t copyArray1Intensity(const kArray1 intensities,
-                                               const std::size_t width,
-                                               GraphicsSampleBuffer<float>& values)
+[[nodiscard]] std::uint8_t array1IntensityBits(const kArray1 intensities,
+                                               const std::size_t width)
 {
     if (intensities == kNULL || kArray1_Length(intensities) < width)
     {
         return 0U;
     }
+    return intensityBitsFromItemSize(kArray1_ItemSize(intensities));
+}
 
-    const kSize itemSize = kArray1_ItemSize(intensities);
-    const std::uint8_t bits = intensityBitsFromItemSize(itemSize);
-    if (bits == 0U)
-    {
-        return 0U;
-    }
-
-    values.resize(width);
-    if (itemSize == sizeof(k8u))
+void writeArray1Intensity(const kArray1 intensities,
+                          const std::size_t width,
+                          float* values)
+{
+    if (kArray1_ItemSize(intensities) == sizeof(k8u))
     {
         const auto* src = kArray1_DataT(intensities, k8u);
         GRAPHICSENGINE_OMP_PARALLEL_FOR
@@ -133,7 +133,7 @@ void applyCommonFrameFields(RangeFrame& frame,
         {
             values[static_cast<std::size_t>(index)] = static_cast<float>(src[index]);
         }
-        return bits;
+        return;
     }
 
     const auto* src = kArray1_DataT(intensities, k16u);
@@ -142,13 +142,11 @@ void applyCommonFrameFields(RangeFrame& frame,
     {
         values[static_cast<std::size_t>(index)] = static_cast<float>(src[index]);
     }
-    return bits;
 }
 
-[[nodiscard]] std::uint8_t copyArray2Intensity(const kArray2 intensities,
+[[nodiscard]] std::uint8_t array2IntensityBits(const kArray2 intensities,
                                                const int width,
-                                               const int height,
-                                               GraphicsSampleBuffer<float>& values)
+                                               const int height)
 {
     const auto count = pixelCount(width, height);
     if (!count.has_value()
@@ -158,35 +156,33 @@ void applyCommonFrameFields(RangeFrame& frame,
     {
         return 0U;
     }
+    return intensityBitsFromItemSize(kArray2_ItemSize(intensities));
+}
 
-    const kSize itemSize = kArray2_ItemSize(intensities);
-    const std::uint8_t bits = intensityBitsFromItemSize(itemSize);
-    if (bits == 0U)
-    {
-        return 0U;
-    }
-
-    values.resize(*count);
-    if (itemSize == sizeof(k8u))
+void writeArray2Intensity(const kArray2 intensities,
+                          const int width,
+                          const int height,
+                          float* values)
+{
+    const std::size_t count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    if (kArray2_ItemSize(intensities) == sizeof(k8u))
     {
         const auto* src = kArray2_DataT(intensities, k8u);
         GRAPHICSENGINE_OMP_PARALLEL_FOR
-        for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(*count); ++index)
+        for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(count); ++index)
         {
             values[static_cast<std::size_t>(index)] = static_cast<float>(src[index]);
         }
-        return bits;
+        return;
     }
 
     const auto* src = kArray2_DataT(intensities, k16u);
     GRAPHICSENGINE_OMP_PARALLEL_FOR
-    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(*count); ++index)
+    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(count); ++index)
     {
         values[static_cast<std::size_t>(index)] = static_cast<float>(src[index]);
     }
-    return bits;
 }
-
 [[nodiscard]] StampInfo readStamp(const GoPxLSdk::GoDataSet& dataSet)
 {
     for (std::size_t index = 0; index < dataSet.Count(); ++index)
@@ -217,7 +213,8 @@ void applyCommonFrameFields(RangeFrame& frame,
 [[nodiscard]] std::optional<RangeFrame> convertUniformSurface(
     const GoPxLSdk::GoGdpSurfaceUniform& msg,
     const StampInfo& stamp,
-    const GraphicsFrameRequest& request)
+    const GraphicsFrameRequest& request,
+    const GraphicsImageStorage& storage)
 {
     const auto width = positiveInt(msg.Width());
     const auto height = positiveInt(msg.Length());
@@ -237,50 +234,45 @@ void applyCommonFrameFields(RangeFrame& frame,
         return std::nullopt;
     }
 
-    RangeFrame frame;
-    applyCommonFrameFields(frame, *width, *height, msg.Resolution(), msg.Offset(), frameId(msg, stamp));
-    frame.zValues.resize(*count);
-    frame.validMask.resize(*count, 1U);
+    const auto* src = kArray2_DataT(ranges, k16s);
+    const std::uint8_t intensityBits = request.includeRangeAuxiliaryChannels
+        ? array2IntensityBits(msg.Intensities(), *width, *height)
+        : 0U;
+
+    GraphicsRangeFrameLayout layout;
+    layout.width = *width;
+    layout.height = *height;
+    layout.channels.validMask = gocator_range::scalarHasInvalid(src, *count);
+    layout.channels.intensity = intensityBits != 0U;
+    GraphicsRangeFrameWriter writer(layout, storage);
+    if (!writer.isValid())
+    {
+        return std::nullopt;
+    }
 
     const kPoint3d64f resolution = msg.Resolution();
     const kPoint3d64f offset = msg.Offset();
-    const auto* src = kArray2_DataT(ranges, k16s);
-    std::size_t validPointCount = 0U;
-
-    GRAPHICSENGINE_OMP_PARALLEL_FOR_REDUCTION_SUM
-    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(*count); ++index)
+    gocator_range::writeScalarZ(src, *count, resolution.z, offset.z,
+        writer.zData(), writer.validMaskData());
+    if (layout.channels.intensity)
     {
-        const auto dstIndex = static_cast<std::size_t>(index);
-        const k16s raw = src[dstIndex];
-        if (raw == k16S_NULL)
-        {
-            frame.zValues[dstIndex] = 0.0F;
-            frame.validMask[dstIndex] = 0U;
-            continue;
-        }
-
-        frame.zValues[dstIndex] = static_cast<float>(offset.z + resolution.z * static_cast<double>(raw));
-        ++validPointCount;
+        writeArray2Intensity(msg.Intensities(), *width, *height, writer.intensityData());
     }
 
-    if (validPointCount == *count)
+    RangeFrame frame = writer.takeFrame();
+    applyCommonFrameFields(frame, *width, *height, resolution, offset, frameId(msg, stamp));
+    if (layout.channels.intensity)
     {
-        frame.validMask.clear();
+        frame.intensityBits = intensityBits;
+        frame.intensityField.bitsPerSample = intensityBits;
     }
-
-    if (request.includeRangeAuxiliaryChannels)
-    {
-        frame.intensityBits = copyArray2Intensity(msg.Intensities(), *width, *height, frame.intensity);
-        frame.intensityField.bitsPerSample = frame.intensityBits;
-    }
-
     return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
 }
-
 [[nodiscard]] std::optional<RangeFrame> convertSurfacePointCloud(
     const GoPxLSdk::GoGdpSurfacePointCloud& msg,
     const StampInfo& stamp,
-    const GraphicsFrameRequest& request)
+    const GraphicsFrameRequest& request,
+    const GraphicsImageStorage& storage)
 {
     const auto width = positiveInt(msg.Width());
     const auto height = positiveInt(msg.Length());
@@ -300,57 +292,50 @@ void applyCommonFrameFields(RangeFrame& frame,
         return std::nullopt;
     }
 
-    RangeFrame frame;
-    applyCommonFrameFields(frame, *width, *height, msg.Resolution(), msg.Offset(), frameId(msg, stamp));
-    frame.xValues.resize(*count);
-    frame.yValues.resize(*count);
-    frame.zValues.resize(*count);
-    frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
-    frame.validMask.resize(*count, 1U);
+    const auto* src = reinterpret_cast<const std::int16_t*>(kArray2_DataT(ranges, kPoint3d16s));
+    const std::uint8_t intensityBits = request.includeRangeAuxiliaryChannels
+        ? array2IntensityBits(msg.Intensities(), *width, *height)
+        : 0U;
+
+    GraphicsRangeFrameLayout layout;
+    layout.width = *width;
+    layout.height = *height;
+    layout.channels.x = true;
+    layout.channels.y = true;
+    layout.channels.validMask = gocator_range::surfacePointsHaveInvalid(src, *count);
+    layout.channels.intensity = intensityBits != 0U;
+    GraphicsRangeFrameWriter writer(layout, storage);
+    if (!writer.isValid())
+    {
+        return std::nullopt;
+    }
 
     const kPoint3d64f resolution = msg.Resolution();
     const kPoint3d64f offset = msg.Offset();
-    const auto* src = kArray2_DataT(ranges, kPoint3d16s);
-    std::size_t validPointCount = 0U;
-
-    GRAPHICSENGINE_OMP_PARALLEL_FOR_REDUCTION_SUM
-    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(*count); ++index)
+    gocator_range::writeSurfacePoints(src, *count,
+        resolution.x, resolution.y, resolution.z,
+        offset.x, offset.y, offset.z,
+        writer.xData(), writer.yData(), writer.zData(), writer.validMaskData());
+    if (layout.channels.intensity)
     {
-        const auto dstIndex = static_cast<std::size_t>(index);
-        const kPoint3d16s point = src[dstIndex];
-        if (point.x == k16S_NULL || point.y == k16S_NULL || point.z == k16S_NULL)
-        {
-            frame.xValues[dstIndex] = 0.0F;
-            frame.yValues[dstIndex] = 0.0F;
-            frame.zValues[dstIndex] = 0.0F;
-            frame.validMask[dstIndex] = 0U;
-            continue;
-        }
-
-        frame.xValues[dstIndex] = static_cast<float>(offset.x + resolution.x * static_cast<double>(point.x));
-        frame.yValues[dstIndex] = static_cast<float>(offset.y + resolution.y * static_cast<double>(point.y));
-        frame.zValues[dstIndex] = static_cast<float>(offset.z + resolution.z * static_cast<double>(point.z));
-        ++validPointCount;
+        writeArray2Intensity(msg.Intensities(), *width, *height, writer.intensityData());
     }
 
-    if (validPointCount == *count)
+    RangeFrame frame = writer.takeFrame();
+    applyCommonFrameFields(frame, *width, *height, resolution, offset, frameId(msg, stamp));
+    frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
+    if (layout.channels.intensity)
     {
-        frame.validMask.clear();
+        frame.intensityBits = intensityBits;
+        frame.intensityField.bitsPerSample = intensityBits;
     }
-
-    if (request.includeRangeAuxiliaryChannels)
-    {
-        frame.intensityBits = copyArray2Intensity(msg.Intensities(), *width, *height, frame.intensity);
-        frame.intensityField.bitsPerSample = frame.intensityBits;
-    }
-
     return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
 }
-
 [[nodiscard]] std::optional<RangeFrame> convertUniformProfile(
     const GoPxLSdk::GoGdpProfileUniform& msg,
     const StampInfo& stamp,
-    const GraphicsFrameRequest& request)
+    const GraphicsFrameRequest& request,
+    const GraphicsImageStorage& storage)
 {
     const auto width = positiveInt(msg.Width());
     if (!width.has_value())
@@ -365,51 +350,46 @@ void applyCommonFrameFields(RangeFrame& frame,
         return std::nullopt;
     }
 
-    RangeFrame frame;
-    applyCommonFrameFields(frame, *width, 1, msg.Resolution(), msg.Offset(), frameId(msg, stamp));
-    frame.yScale = 1.0;
-    frame.zValues.resize(count);
-    frame.validMask.resize(count, 1U);
+    const auto* src = kArray1_DataT(ranges, k16s);
+    const std::uint8_t intensityBits = request.includeRangeAuxiliaryChannels
+        ? array1IntensityBits(msg.Intensities(), count)
+        : 0U;
+
+    GraphicsRangeFrameLayout layout;
+    layout.width = *width;
+    layout.height = 1;
+    layout.channels.validMask = gocator_range::scalarHasInvalid(src, count);
+    layout.channels.intensity = intensityBits != 0U;
+    GraphicsRangeFrameWriter writer(layout, storage);
+    if (!writer.isValid())
+    {
+        return std::nullopt;
+    }
 
     const kPoint3d64f resolution = msg.Resolution();
     const kPoint3d64f offset = msg.Offset();
-    const auto* src = kArray1_DataT(ranges, k16s);
-    std::size_t validPointCount = 0U;
-
-    GRAPHICSENGINE_OMP_PARALLEL_FOR_REDUCTION_SUM
-    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(count); ++index)
+    gocator_range::writeScalarZ(src, count, resolution.z, offset.z,
+        writer.zData(), writer.validMaskData());
+    if (layout.channels.intensity)
     {
-        const auto dstIndex = static_cast<std::size_t>(index);
-        const k16s raw = src[dstIndex];
-        if (raw == k16S_NULL)
-        {
-            frame.zValues[dstIndex] = 0.0F;
-            frame.validMask[dstIndex] = 0U;
-            continue;
-        }
-
-        frame.zValues[dstIndex] = static_cast<float>(offset.z + resolution.z * static_cast<double>(raw));
-        ++validPointCount;
+        writeArray1Intensity(msg.Intensities(), count, writer.intensityData());
     }
 
-    if (validPointCount == count)
+    RangeFrame frame = writer.takeFrame();
+    applyCommonFrameFields(frame, *width, 1, resolution, offset, frameId(msg, stamp));
+    frame.yScale = 1.0;
+    if (layout.channels.intensity)
     {
-        frame.validMask.clear();
+        frame.intensityBits = intensityBits;
+        frame.intensityField.bitsPerSample = intensityBits;
     }
-
-    if (request.includeRangeAuxiliaryChannels)
-    {
-        frame.intensityBits = copyArray1Intensity(msg.Intensities(), count, frame.intensity);
-        frame.intensityField.bitsPerSample = frame.intensityBits;
-    }
-
     return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
 }
-
 [[nodiscard]] std::optional<RangeFrame> convertProfilePointCloud(
     const GoPxLSdk::GoGdpProfilePointCloud& msg,
     const StampInfo& stamp,
-    const GraphicsFrameRequest& request)
+    const GraphicsFrameRequest& request,
+    const GraphicsImageStorage& storage)
 {
     const auto width = positiveInt(msg.Width());
     if (!width.has_value())
@@ -424,51 +404,52 @@ void applyCommonFrameFields(RangeFrame& frame,
         return std::nullopt;
     }
 
-    RangeFrame frame;
-    applyCommonFrameFields(frame, *width, 1, msg.Resolution(), msg.Offset(), frameId(msg, stamp));
-    frame.yScale = 1.0;
-    frame.xValues.resize(count);
-    frame.yValues.resize(count, 0.0F);
-    frame.zValues.resize(count);
-    frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
-    frame.validMask.resize(count, 1U);
+    const auto* src = reinterpret_cast<const std::int16_t*>(kArray1_DataT(ranges, kPoint16s));
+    const std::uint8_t intensityBits = request.includeRangeAuxiliaryChannels
+        ? array1IntensityBits(msg.Intensities(), count)
+        : 0U;
+
+    GraphicsRangeFrameLayout layout;
+    layout.width = *width;
+    layout.height = 1;
+    layout.channels.x = true;
+    layout.channels.y = true;
+    layout.channels.validMask = gocator_range::profilePointsHaveInvalid(src, count);
+    layout.channels.intensity = intensityBits != 0U;
+    GraphicsRangeFrameWriter writer(layout, storage);
+    if (!writer.isValid())
+    {
+        return std::nullopt;
+    }
 
     const kPoint3d64f resolution = msg.Resolution();
     const kPoint3d64f offset = msg.Offset();
-    const auto* src = kArray1_DataT(ranges, kPoint16s);
-    std::size_t validPointCount = 0U;
-
-    GRAPHICSENGINE_OMP_PARALLEL_FOR_REDUCTION_SUM
-    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(count); ++index)
+    std::fill_n(writer.yData(), count, 0.0F);
+    gocator_range::writeProfilePoints(src, count, resolution.x, resolution.z,
+        offset.x, offset.z, writer.xData(), writer.zData(), writer.validMaskData());
+    if (layout.channels.intensity)
     {
-        const auto dstIndex = static_cast<std::size_t>(index);
-        const kPoint16s point = src[dstIndex];
-        if (point.x == k16S_NULL || point.y == k16S_NULL)
-        {
-            frame.xValues[dstIndex] = 0.0F;
-            frame.zValues[dstIndex] = 0.0F;
-            frame.validMask[dstIndex] = 0U;
-            continue;
-        }
-
-        frame.xValues[dstIndex] = static_cast<float>(offset.x + resolution.x * static_cast<double>(point.x));
-        frame.zValues[dstIndex] = static_cast<float>(offset.z + resolution.z * static_cast<double>(point.y));
-        ++validPointCount;
+        writeArray1Intensity(msg.Intensities(), count, writer.intensityData());
     }
 
-    if (validPointCount == count)
+    RangeFrame frame = writer.takeFrame();
+    applyCommonFrameFields(frame, *width, 1, resolution, offset, frameId(msg, stamp));
+    frame.yScale = 1.0;
+    frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
+    if (layout.channels.intensity)
     {
-        frame.validMask.clear();
+        frame.intensityBits = intensityBits;
+        frame.intensityField.bitsPerSample = intensityBits;
     }
-
-    if (request.includeRangeAuxiliaryChannels)
-    {
-        frame.intensityBits = copyArray1Intensity(msg.Intensities(), count, frame.intensity);
-        frame.intensityField.bitsPerSample = frame.intensityBits;
-    }
-
     return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
 }
+
+} // namespace
+
+void GocatorDataSetGraphicsFrameAdapter::setFrameStorage(GraphicsImageStorage storage)
+{
+    std::lock_guard<std::mutex> lock(_storageMutex);
+    _storage = std::move(storage);
 }
 
 std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphicsFrame(
@@ -480,6 +461,12 @@ std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphics
         return std::nullopt;
     }
 
+    GraphicsImageStorage storage;
+    {
+        std::lock_guard<std::mutex> lock(_storageMutex);
+        storage = _storage;
+    }
+
     const StampInfo stamp = readStamp(dataSet);
     for (std::size_t index = 0; index < dataSet.Count(); ++index)
     {
@@ -489,19 +476,19 @@ std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphics
         switch (msg.Type())
         {
         case GoPxLSdk::MessageType::UNIFORM_SURFACE:
-            frame = convertUniformSurface(static_cast<const GoPxLSdk::GoGdpSurfaceUniform&>(msg), stamp, request);
+            frame = convertUniformSurface(static_cast<const GoPxLSdk::GoGdpSurfaceUniform&>(msg), stamp, request, storage);
             break;
 
         case GoPxLSdk::MessageType::SURFACE_POINT_CLOUD:
-            frame = convertSurfacePointCloud(static_cast<const GoPxLSdk::GoGdpSurfacePointCloud&>(msg), stamp, request);
+            frame = convertSurfacePointCloud(static_cast<const GoPxLSdk::GoGdpSurfacePointCloud&>(msg), stamp, request, storage);
             break;
 
         case GoPxLSdk::MessageType::UNIFORM_PROFILE:
-            frame = convertUniformProfile(static_cast<const GoPxLSdk::GoGdpProfileUniform&>(msg), stamp, request);
+            frame = convertUniformProfile(static_cast<const GoPxLSdk::GoGdpProfileUniform&>(msg), stamp, request, storage);
             break;
 
         case GoPxLSdk::MessageType::PROFILE_POINT_CLOUD:
-            frame = convertProfilePointCloud(static_cast<const GoPxLSdk::GoGdpProfilePointCloud&>(msg), stamp, request);
+            frame = convertProfilePointCloud(static_cast<const GoPxLSdk::GoGdpProfilePointCloud&>(msg), stamp, request, storage);
             break;
 
         default:
