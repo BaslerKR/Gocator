@@ -22,14 +22,18 @@ inline constexpr std::int16_t kNullSample = (std::numeric_limits<std::int16_t>::
     const std::int16_t* const samples,
     const std::size_t count) noexcept
 {
-    for (std::size_t index = 0U; index < count; ++index)
+    std::size_t invalidCount = 0U;
+#ifdef _OPENMP
+#pragma omp parallel for reduction(+:invalidCount)
+#endif
+    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(count); ++index)
     {
-        if (samples[index] == kNullSample)
+        if (samples[static_cast<std::size_t>(index)] == kNullSample)
         {
-            return true;
+            ++invalidCount;
         }
     }
-    return false;
+    return invalidCount != 0U;
 }
 
 inline void writeScalarZ(
@@ -40,9 +44,12 @@ inline void writeScalarZ(
     float* const zValues,
     std::uint8_t* const mask) noexcept
 {
-    for (std::size_t index = 0U; index < count; ++index)
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(count); ++index)
     {
-        const std::int16_t raw = samples[index];
+        const std::int16_t raw = samples[static_cast<std::size_t>(index)];
         if (raw == kNullSample)
         {
             zValues[index] = 0.0F;
@@ -64,16 +71,21 @@ inline void writeScalarZ(
     const std::int16_t* const points,
     const std::size_t count) noexcept
 {
-    for (std::size_t index = 0U; index < count; ++index)
+    std::size_t invalidCount = 0U;
+#ifdef _OPENMP
+#pragma omp parallel for reduction(+:invalidCount)
+#endif
+    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(count); ++index)
     {
-        if (points[index * 3U] == kNullSample
-            || points[index * 3U + 1U] == kNullSample
-            || points[index * 3U + 2U] == kNullSample)
+        const auto base = static_cast<std::size_t>(index) * 3U;
+        if (points[base] == kNullSample
+            || points[base + 1U] == kNullSample
+            || points[base + 2U] == kNullSample)
         {
-            return true;
+            ++invalidCount;
         }
     }
-    return false;
+    return invalidCount != 0U;
 }
 
 inline void writeSurfacePoints(
@@ -90,11 +102,15 @@ inline void writeSurfacePoints(
     float* const zValues,
     std::uint8_t* const mask) noexcept
 {
-    for (std::size_t index = 0U; index < count; ++index)
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(count); ++index)
     {
-        const std::int16_t x = points[index * 3U];
-        const std::int16_t y = points[index * 3U + 1U];
-        const std::int16_t z = points[index * 3U + 2U];
+        const auto base = static_cast<std::size_t>(index) * 3U;
+        const std::int16_t x = points[base];
+        const std::int16_t y = points[base + 1U];
+        const std::int16_t z = points[base + 2U];
         if (x == kNullSample || y == kNullSample || z == kNullSample)
         {
             xValues[index] = 0.0F;
@@ -120,14 +136,19 @@ inline void writeSurfacePoints(
     const std::int16_t* const points,
     const std::size_t count) noexcept
 {
-    for (std::size_t index = 0U; index < count; ++index)
+    std::size_t invalidCount = 0U;
+#ifdef _OPENMP
+#pragma omp parallel for reduction(+:invalidCount)
+#endif
+    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(count); ++index)
     {
-        if (points[index * 2U] == kNullSample || points[index * 2U + 1U] == kNullSample)
+        const auto base = static_cast<std::size_t>(index) * 2U;
+        if (points[base] == kNullSample || points[base + 1U] == kNullSample)
         {
-            return true;
+            ++invalidCount;
         }
     }
-    return false;
+    return invalidCount != 0U;
 }
 
 inline void writeProfilePoints(
@@ -141,10 +162,14 @@ inline void writeProfilePoints(
     float* const zValues,
     std::uint8_t* const mask) noexcept
 {
-    for (std::size_t index = 0U; index < count; ++index)
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (std::ptrdiff_t index = 0; index < static_cast<std::ptrdiff_t>(count); ++index)
     {
-        const std::int16_t x = points[index * 2U];
-        const std::int16_t z = points[index * 2U + 1U];
+        const auto base = static_cast<std::size_t>(index) * 2U;
+        const std::int16_t x = points[base];
+        const std::int16_t z = points[base + 1U];
         if (x == kNullSample || z == kNullSample)
         {
             xValues[index] = 0.0F;
