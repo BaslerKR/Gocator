@@ -110,7 +110,7 @@ void applyCommonFrameFields(RangeFrame& frame,
 
 [[nodiscard]] std::uint8_t copyArray1Intensity(const kArray1 intensities,
                                                const std::size_t width,
-                                               std::vector<float>& values)
+                                               GraphicsSampleBuffer<float>& values)
 {
     if (intensities == kNULL || kArray1_Length(intensities) < width)
     {
@@ -148,7 +148,7 @@ void applyCommonFrameFields(RangeFrame& frame,
 [[nodiscard]] std::uint8_t copyArray2Intensity(const kArray2 intensities,
                                                const int width,
                                                const int height,
-                                               std::vector<float>& values)
+                                               GraphicsSampleBuffer<float>& values)
 {
     const auto count = pixelCount(width, height);
     if (!count.has_value()
