@@ -84,6 +84,11 @@ void GocatorSourceController::setFrameConsumer(FrameConsumer consumer) {
     _frameConsumer = std::move(consumer);
 }
 
+void GocatorSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider) {
+    _frameStorage = std::move(provider);
+    if (_graphicsStream) _graphicsStream->setFrameStorage(frameStorageFunction(_frameStorage));
+}
+
 void GocatorSourceController::registerCallbacks() {
     if (!_gocator) return;
 
@@ -104,6 +109,7 @@ void GocatorSourceController::registerCallbacks() {
             frame.frameSeq = _frameSeq.fetch_add(1, std::memory_order_relaxed);
             _frameConsumer(std::move(frame), sourceIndex);
         });
+    if (_frameStorage) _graphicsStream->setFrameStorage(frameStorageFunction(_frameStorage));
 }
 
 void GocatorSourceController::deregisterCallbacks() {

@@ -6,8 +6,11 @@
  */
 
 #include "engine/GraphicsFrameAdapter.h"
+#include "engine/GraphicsImageWriter.h"
 #include "Gocator.h"
 
+#include <memory>
+#include <mutex>
 #include <optional>
 
 namespace GoPxLSdk
@@ -24,10 +27,16 @@ public:
 
     using GraphicsFrameAdapter<GocatorDataSetGraphicsFrameAdapter, GoPxLSdk::GoDataSet>::convertFrame;
 
+    /** Sets where range samples are written; empty restores storage of the adapter's own. */
+    void setFrameStorage(GraphicsImageStorage storage);
+
 private:
     friend class GraphicsFrameAdapter<GocatorDataSetGraphicsFrameAdapter, GoPxLSdk::GoDataSet>;
 
     [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
         const GoPxLSdk::GoDataSet& dataSet,
         const GraphicsFrameRequest& request) const;
+
+    mutable std::mutex _storageMutex;
+    GraphicsImageStorage _storage;
 };

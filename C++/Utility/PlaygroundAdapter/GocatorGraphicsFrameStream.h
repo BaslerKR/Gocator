@@ -6,6 +6,7 @@
  */
 
 #include "engine/GraphicsFrameAdapter.h"
+#include "engine/GraphicsImageWriter.h"
 
 #include <memory>
 
@@ -20,6 +21,9 @@ public:
 
     GocatorGraphicsFrameStream(const GocatorGraphicsFrameStream&) = delete;
     GocatorGraphicsFrameStream& operator=(const GocatorGraphicsFrameStream&) = delete;
+
+    /** Forwards the storage range samples are written into; callable while grabbing. */
+    void setFrameStorage(GraphicsImageStorage storage);
 
 private:
     class Impl;

@@ -3,6 +3,7 @@
 #include "Gocator.h"
 #include "DeviceConnectionControl.h"
 #include "DeviceParameterControl.h"
+#include "FrameStorage.h"
 #include <QFuture>
 #include <atomic>
 #include <functional>
@@ -12,9 +13,10 @@
 
 class GocatorGraphicsFrameStream;
 
-class GocatorSourceController : public AbstractSourceController, public IDeviceParameterControl, public IDeviceConnectionControl {
+class GocatorSourceController : public AbstractSourceController, public IDeviceParameterControl, public IDeviceConnectionControl,
+                                public IFrameStorageClient {
     Q_OBJECT
-    Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl)
+    Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl IFrameStorageClient)
 public:
     using ParameterCompletion = IDeviceParameterControl::Completion;
     using ConnectionCompletion = IDeviceConnectionControl::Completion;
@@ -54,6 +56,9 @@ public:
     DeviceConnectionResult requestConnect(std::string targetId, IDeviceConnectionControl::Completion completion) override;
     /** @brief Closes the exact current connection while acquisition is stopped. */
     DeviceConnectionResult requestDisconnect(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
+
+    /** @brief Accepts the storage its 3D frames should be written into. */
+    void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider) override;
 
 signals:
     /** @brief Publishes a completed discovery cache change for presentation observers. */
@@ -110,4 +115,5 @@ private:
 
     Gocator::CallbackId _statusCallbackId = 0;
     std::unique_ptr<GocatorGraphicsFrameStream> _graphicsStream;
+    std::shared_ptr<IFrameStorageProvider> _frameStorage;
 };
