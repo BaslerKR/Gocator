@@ -132,20 +132,11 @@ bool GocatorSourceController::liveActive() const {
         || (_lifecycle.diagnostics && _lifecycle.diagnostics().grabbing);
 }
 
-bool GocatorSourceController::beginLive(bool reserved) {
-    // One acquisition authority: a live start is refused while a single run or Live is active,
-    // and a non-reserved caller must own the same start reservation as source.start.
-    if (_singleInFlight.load()) {
-        if (reserved) _acquisitionStarting = false;
+bool GocatorSourceController::beginLive() {
+    // The caller already owns the acquisition reservation used by source.start.
+    if (_singleInFlight.load() || liveActive()) {
+        _acquisitionStarting = false;
         return false;
-    }
-    if (liveActive()) {
-        if (reserved) _acquisitionStarting = false;
-        return false;
-    }
-    if (!reserved) {
-        bool expected = false;
-        if (!_acquisitionStarting.compare_exchange_strong(expected, true)) return false;
     }
     bool started = false;
     try {
@@ -480,6 +471,7 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
         try {
             singleRun = std::make_shared<SingleRun>();
         } catch (...) {
+            _acquisitionStarting = false;
             _lifecycle.endControl();
             return refused(DeviceConnectionError::BackendFailure,
                 "Could not allocate the single acquisition state.");
@@ -581,7 +573,7 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
                         }
                     }
                 } else if (operation == Lifecycle::LiveStart) {
-                    result = beginLive(true)
+                    result = beginLive()
                         ? DeviceConnectionResult{{}, {}, DeviceConnectionEffect::Applied, copiedState()}
                         : DeviceConnectionResult{DeviceConnectionError::Unavailable,
                             "The Gocator could not start live acquisition.",

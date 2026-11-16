@@ -196,10 +196,8 @@ private:
     DeviceConnectionState connectionState() const;
     /** @brief Copies the observed producer acquisition state without SDK waits. */
     bool liveActive() const;
-    /** @brief Starts continuous acquisition through the one acquisition authority.
-     *  @param reserved When true the caller already owns the start reservation.
-     */
-    bool beginLive(bool reserved);
+    /** @brief Starts continuous acquisition while the caller owns the start reservation. */
+    bool beginLive();
     /** @brief Starts one acquisition run through the shared SDK seam. */
     bool beginGrab(std::size_t frames);
     /** @brief Reports one producer frame so a pending single can complete. */
