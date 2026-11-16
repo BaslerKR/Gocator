@@ -64,9 +64,14 @@ GocatorSourceController::~GocatorSourceController() {
 }
 
 void GocatorSourceController::start() {
-    if (_gocator) {
-        _gocator->grab();
-    }
+    if (!_gocator) return;
+    const bool wasGrabbing = _isGrabbing.load();
+    _gocator->grab();
+    // A disconnected sensor refuses the grab without a status transition. Report the observed
+    // state so an in-process caller and a worker proxy that optimistically marked the start
+    // both keep the same inactive state.
+    if (!wasGrabbing && !_gocator->isGrabbing())
+        emit diagnosticAcquisitionChanged(false, QStringLiteral("gocator"));
 }
 
 void GocatorSourceController::stop() {

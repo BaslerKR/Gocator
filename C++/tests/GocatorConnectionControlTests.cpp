@@ -70,6 +70,7 @@ class GocatorConnectionControlTests : public QObject {
 private slots:
     void lifecycleAdmissionAndStaleGeneration();
     void discoverPublishesCacheAndFailureStaysSilent();
+    void startWithoutConnectionReportsInactive();
     void snapshotDoesNotWaitForControlLock();
     void busyGateAndTeardownDrain();
     void guiAndApiShareControlGate();
@@ -286,6 +287,22 @@ void GocatorConnectionControlTests::discoverPublishesCacheAndFailureStaysSilent(
     });
     QCOMPARE(failed.result.error, DeviceConnectionError::BackendFailure);
     QCOMPARE(changed.count(), 1);
+}
+
+void GocatorConnectionControlTests::startWithoutConnectionReportsInactive()
+{
+    // A grab without a connection is refused inside Gocator::grab(). A worker proxy marks
+    // source.start optimistically, so the controller must publish the observed inactive state.
+    Gocator gocator;
+    GocatorSourceController controller(&gocator);
+    QSignalSpy changed(&controller, &GocatorSourceController::diagnosticAcquisitionChanged);
+    controller.start();
+    QCOMPARE(controller.isGrabbing(), false);
+    QVERIFY(!changed.isEmpty());
+    const auto arguments = changed.last();
+    QCOMPARE(arguments.at(0).toBool(), false);
+    QCOMPARE(arguments.at(1).toString(), QStringLiteral("gocator"));
+    controller.stop();
 }
 
 void GocatorConnectionControlTests::snapshotDoesNotWaitForControlLock()
