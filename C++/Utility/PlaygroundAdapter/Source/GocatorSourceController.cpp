@@ -68,6 +68,12 @@ GocatorSourceController::GocatorSourceController(Gocator* gocator, QObject* pare
         _lifecycle.beginControl = [gocator] { return gocator->tryBeginControl(); };
         _lifecycle.endControl = [gocator] { gocator->endControl(); };
         _lifecycle.diagnostics = [gocator] { return gocator->runtimeDiagnostics(); };
+        _lifecycle.grab = [gocator](std::size_t frames) {
+            if (!gocator->isOpened() || gocator->isGrabbing()) return false;
+            gocator->grab(frames);
+            return gocator->isGrabbing();
+        };
+        _lifecycle.stop = [gocator] { gocator->stop(); };
     }
     registerCallbacks();
 }
@@ -76,31 +82,104 @@ GocatorSourceController::~GocatorSourceController() {
     stopObservationThread();
     _notifications.close();
     _parameterWork.waitForFinished();
-    _controlWork.waitForFinished();
+    // Stop first so a pending single observes the explicit stop instead of its bounded timeout.
     stop();
+    _controlWork.waitForFinished();
     deregisterCallbacks();
 }
 
 void GocatorSourceController::start() {
-    if (!_gocator) return;
+    if (!_gocator && !_lifecycle.grab) return;
     const bool wasGrabbing = _isGrabbing.load();
-    _gocator->grab();
-    // A disconnected sensor refuses the grab without a status transition. Report the observed
-    // state so an in-process caller and a worker proxy that optimistically marked the start
-    // both keep the same inactive state.
-    if (!wasGrabbing && !_gocator->isGrabbing())
+    if (beginLive()) return;
+    // A disconnected producer or an active single run refuses the start without a status
+    // transition. Report the observed state so an in-process caller and a worker proxy that
+    // optimistically marked the start both keep the same inactive state.
+    const bool observed = _isGrabbing.load()
+        || (_lifecycle.diagnostics && _lifecycle.diagnostics().grabbing);
+    if (!wasGrabbing && !observed)
         emit diagnosticAcquisitionChanged(false, QStringLiteral("gocator"));
 }
 
 void GocatorSourceController::stop() {
-    if (_gocator) {
-        _gocator->stop();
-        _isGrabbing = false;
-    }
+    if (!_lifecycle.stop && !_gocator) return;
+    if (_lifecycle.stop) _lifecycle.stop();
+    else _gocator->stop();
+    _isGrabbing = false;
+    noteAcquisitionStopped();
 }
 
 bool GocatorSourceController::isGrabbing() const {
     return _isGrabbing;
+}
+
+bool GocatorSourceController::beginLive() {
+    // One acquisition authority: a live start is refused while a single run or Live is active,
+    // so source.start and device.live-start never issue a second producer start.
+    if (_singleInFlight.load()) return false;
+    if (_isGrabbing.load()) return false;
+    if (_lifecycle.diagnostics && _lifecycle.diagnostics().grabbing) return false;
+    return beginGrab(0);
+}
+
+bool GocatorSourceController::beginGrab(std::size_t frames) {
+    if (_lifecycle.grab) return _lifecycle.grab(frames);
+    if (!_gocator) return false;
+    if (_gocator->isGrabbing()) return false;
+    _gocator->grab(frames);
+    return _gocator->isGrabbing();
+}
+
+void GocatorSourceController::noteAcquisitionFrame() {
+    if (!_singleInFlight.load(std::memory_order_relaxed)) return;
+    std::shared_ptr<SingleRun> run;
+    {
+        std::lock_guard<std::mutex> lock(_singleMutex);
+        run = _singleRun;
+    }
+    if (!run) return;
+    {
+        std::lock_guard<std::mutex> lock(run->mutex);
+        run->delivered = true;
+    }
+    run->condition.notify_all();
+}
+
+void GocatorSourceController::noteAcquisitionEnded() {
+    if (!_singleInFlight.load(std::memory_order_relaxed)) return;
+    std::shared_ptr<SingleRun> run;
+    {
+        std::lock_guard<std::mutex> lock(_singleMutex);
+        run = _singleRun;
+    }
+    if (!run) return;
+    {
+        std::lock_guard<std::mutex> lock(run->mutex);
+        run->ended = true;
+    }
+    run->condition.notify_all();
+}
+
+void GocatorSourceController::noteAcquisitionStopped() {
+    std::shared_ptr<SingleRun> run;
+    {
+        std::lock_guard<std::mutex> lock(_singleMutex);
+        run = _singleRun;
+    }
+    if (!run) return;
+    {
+        std::lock_guard<std::mutex> lock(run->mutex);
+        run->stopped = true;
+    }
+    run->condition.notify_all();
+}
+
+void GocatorSourceController::finishSingle(const std::shared_ptr<SingleRun>& run) {
+    {
+        std::lock_guard<std::mutex> lock(_singleMutex);
+        if (_singleRun == run) _singleRun.reset();
+    }
+    _singleInFlight = false;
 }
 
 void GocatorSourceController::setFrameConsumer(FrameConsumer consumer) {
@@ -119,6 +198,7 @@ void GocatorSourceController::registerCallbacks() {
     _statusCallbackId = _gocator->registerStatusCallback([this](Gocator::Status status, bool on) {
         if (status == Gocator::GrabbingStatus) {
             _isGrabbing = on;
+            if (!on) noteAcquisitionEnded();
             emit diagnosticAcquisitionChanged(on, QStringLiteral("gocator"));
             // Writability is re-observed after acquisition changes; never cached from a locked
             // state and never deferred to a GUI timer.
@@ -147,12 +227,22 @@ void GocatorSourceController::registerCallbacks() {
             _frameConsumer(std::move(frame), sourceIndex);
         });
     if (_frameStorage) _graphicsStream->setFrameStorage(frameStorageFunction(_frameStorage));
+
+    // A single completes only after the producer delivered its one frame. Keep the observation
+    // separate from the graphics stream so a conversion result cannot hide the delivery.
+    _singleCallbackId = _gocator->registerGrabCallback(
+        [this](const GoPxLSdk::GoDataSet&, std::size_t) { noteAcquisitionFrame(); });
 }
 
 void GocatorSourceController::deregisterCallbacks() {
     if (!_gocator) return;
 
     _graphicsStream.reset();
+
+    if (_singleCallbackId != 0) {
+        _gocator->deregisterGrabCallback(_singleCallbackId);
+        _singleCallbackId = 0;
+    }
 
     if (_statusCallbackId != 0) {
         _gocator->deregisterStatusCallback(_statusCallbackId);
@@ -209,9 +299,7 @@ DeviceConnectionCapabilities GocatorSourceController::connectionCapabilities() c
         return {ended, ended, ended, ended, ended, ended};
     }
     const DeviceConnectionAvailability available{true, {}};
-    const DeviceConnectionAvailability acquisition{false,
-        "Gocator acquisition uses source.start and source.stop."};
-    return {available, available, available, available, acquisition, acquisition};
+    return {available, available, available, available, available, available};
 }
 
 DeviceConnectionResult GocatorSourceController::requestConnectionTargets(TargetsCompletion completion)
@@ -259,14 +347,37 @@ DeviceConnectionResult GocatorSourceController::requestDisconnect(std::string co
     return admitLifecycle(Lifecycle::Disconnect, std::move(connectionId), std::move(completion), {});
 }
 
+DeviceConnectionResult GocatorSourceController::requestSingle(std::string connectionId,
+    IDeviceConnectionControl::Completion completion)
+{
+    return admitLifecycle(Lifecycle::Single, std::move(connectionId), std::move(completion), {});
+}
+
+DeviceConnectionResult GocatorSourceController::requestLiveStart(std::string connectionId,
+    IDeviceConnectionControl::Completion completion)
+{
+    return admitLifecycle(Lifecycle::LiveStart, std::move(connectionId), std::move(completion), {});
+}
+
+DeviceConnectionResult GocatorSourceController::requestLiveStop(std::string connectionId,
+    IDeviceConnectionControl::Completion completion)
+{
+    return admitLifecycle(Lifecycle::LiveStop, std::move(connectionId), std::move(completion), {});
+}
+
 DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operation, std::string argument,
     IDeviceConnectionControl::Completion completion, TargetsCompletion targetsCompletion)
 {
     Q_ASSERT(QThread::currentThread() == thread());
     const bool discover = operation == Lifecycle::Discover;
+    const bool single = operation == Lifecycle::Single;
+    const bool liveStart = operation == Lifecycle::LiveStart;
+    const bool liveStop = operation == Lifecycle::LiveStop;
     if (discover ? !targetsCompletion : !completion)
         return refused(DeviceConnectionError::InvalidArgument, "Completion is required.");
-    if (!_lifecycleAvailable || !_lifecycle.snapshot || !_lifecycle.beginControl || !_lifecycle.endControl)
+    if (!_lifecycleAvailable || !_lifecycle.snapshot || !_lifecycle.beginControl || !_lifecycle.endControl
+        || ((single || liveStart) && !_lifecycle.grab)
+        || (liveStop && !_lifecycle.stop))
         return refused(DeviceConnectionError::Unavailable, "The Gocator session has ended.");
     if (_parameterBusy.load())
         return refused(DeviceConnectionError::Busy, "A parameter operation is active.");
@@ -274,17 +385,18 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
     const auto snapshot = _lifecycle.snapshot();
     const auto diagnostics = _lifecycle.diagnostics
         ? _lifecycle.diagnostics() : GocatorRuntimeDiagnostics{};
+    const bool grabbing = diagnostics.grabbing || _isGrabbing.load();
     if (discover) {
         if (snapshot.opened)
             return refused(DeviceConnectionError::Busy, "Disconnect before discovery.");
-        if (diagnostics.grabbing)
+        if (grabbing)
             return refused(DeviceConnectionError::Busy, "Stop live acquisition before discovery.");
     } else if (operation == Lifecycle::Connect) {
         if (snapshot.opened)
             return refused(DeviceConnectionError::Conflict, "Disconnect before connecting another device.");
         if (argument.empty() || argument.find('\0') != std::string::npos)
             return refused(DeviceConnectionError::InvalidArgument, "An exact address is required.");
-        if (diagnostics.grabbing)
+        if (grabbing)
             return refused(DeviceConnectionError::Busy, "Stop live acquisition before connecting.");
     } else {
         if (!snapshot.opened)
@@ -293,15 +405,43 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
             return refused(DeviceConnectionError::InvalidArgument, "An exact connectionId is required.");
         if (currentConnectionId(snapshot.generation) != argument)
             return refused(DeviceConnectionError::Conflict, "The connection changed; observe it again.");
-        if (diagnostics.grabbing)
+        if (single) {
+            if (_singleInFlight.load())
+                return refused(DeviceConnectionError::Busy, "A single grab is already in flight.");
+            if (grabbing)
+                return refused(DeviceConnectionError::Busy, "Stop Live before a single grab.");
+        } else if (liveStart) {
+            if (_singleInFlight.load())
+                return refused(DeviceConnectionError::Busy, "A single grab is in flight.");
+            if (grabbing)
+                return refused(DeviceConnectionError::Conflict, "Live acquisition is already running.");
+        } else if (liveStop) {
+            if (_singleInFlight.load() || !grabbing)
+                return refused(DeviceConnectionError::Conflict, "Live acquisition is not running.");
+        } else if (grabbing) {
             return refused(DeviceConnectionError::Busy, "Stop live acquisition before disconnecting.");
+        }
     }
 
     if (!_lifecycle.beginControl())
         return refused(DeviceConnectionError::Busy, "Another device control operation is active.");
+    std::shared_ptr<SingleRun> singleRun;
+    if (single) {
+        try {
+            singleRun = std::make_shared<SingleRun>();
+        } catch (...) {
+            _lifecycle.endControl();
+            return refused(DeviceConnectionError::BackendFailure,
+                "Could not allocate the single acquisition state.");
+        }
+        std::lock_guard<std::mutex> lock(_singleMutex);
+        _singleRun = singleRun;
+        _singleInFlight = true;
+    }
     try {
         _controlWork = QtConcurrent::run([this, operation, argument = std::move(argument),
-            completion = std::move(completion), targetsCompletion = std::move(targetsCompletion)] {
+            completion = std::move(completion), targetsCompletion = std::move(targetsCompletion),
+            singleRun] {
             const auto copiedState = [this]() -> std::optional<DeviceConnectionState> {
                 try { return connectionState(); } catch (...) { return std::nullopt; }
             };
@@ -326,13 +466,78 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
                         result = {DeviceConnectionError::BackendFailure,
                             error.empty() ? "The Gocator connection could not be opened." : error,
                             DeviceConnectionEffect::None, copiedState()};
-                } else {
+                } else if (operation == Lifecycle::Disconnect) {
                     if (_lifecycle.close) _lifecycle.close();
                     const bool opened = _lifecycle.snapshot && _lifecycle.snapshot().opened;
                     result = opened
                         ? DeviceConnectionResult{DeviceConnectionError::BackendFailure,
                             "The Gocator connection could not be closed.", DeviceConnectionEffect::Unknown, copiedState()}
                         : DeviceConnectionResult{{}, {}, DeviceConnectionEffect::Applied, copiedState()};
+                } else if (operation == Lifecycle::Single) {
+                    bool stopped = false;
+                    bool delivered = false;
+                    {
+                        std::lock_guard<std::mutex> lock(singleRun->mutex);
+                        stopped = singleRun->stopped;
+                        delivered = singleRun->delivered;
+                    }
+                    const bool started = stopped ? false : beginGrab(1);
+                    {
+                        std::lock_guard<std::mutex> lock(singleRun->mutex);
+                        stopped = singleRun->stopped;
+                        delivered = singleRun->delivered;
+                    }
+                    if (stopped) {
+                        // source.stop reached us before or during the producer start; stop again in
+                        // case the start landed after the earlier stop and report the stopped run.
+                        if (started) stop();
+                        result = delivered
+                            ? DeviceConnectionResult{{}, {}, DeviceConnectionEffect::Applied, copiedState()}
+                            : DeviceConnectionResult{DeviceConnectionError::BackendFailure,
+                                "Single acquisition was stopped before a frame was delivered.",
+                                started ? DeviceConnectionEffect::Applied : DeviceConnectionEffect::None,
+                                copiedState()};
+                    } else if (!started && !delivered) {
+                        result = {DeviceConnectionError::Unavailable,
+                            "The Gocator could not start a single grab.",
+                            DeviceConnectionEffect::None, copiedState()};
+                    } else {
+                        bool ended = false;
+                        {
+                            std::unique_lock<std::mutex> lock(singleRun->mutex);
+                            const bool finished = singleRun->condition.wait_for(lock, std::chrono::seconds(30),
+                                [&] { return singleRun->ended || singleRun->stopped; });
+                            delivered = singleRun->delivered;
+                            ended = singleRun->ended;
+                            stopped = singleRun->stopped;
+                            if (!finished) {
+                                lock.unlock();
+                                stop();
+                                result = {DeviceConnectionError::Timeout,
+                                    "Single acquisition did not finish within 30 s; accepted effects may have occurred.",
+                                    DeviceConnectionEffect::Applied, copiedState()};
+                            }
+                        }
+                        if (result.error == DeviceConnectionError::None) {
+                            if (!delivered) {
+                                result = {DeviceConnectionError::BackendFailure,
+                                    stopped ? "Single acquisition was stopped before a frame was delivered."
+                                            : "Single acquisition ended without delivering a frame.",
+                                    DeviceConnectionEffect::Applied, copiedState()};
+                            } else if (ended || stopped) {
+                                result = {{}, {}, DeviceConnectionEffect::Applied, copiedState()};
+                            }
+                        }
+                    }
+                } else if (operation == Lifecycle::LiveStart) {
+                    result = beginLive()
+                        ? DeviceConnectionResult{{}, {}, DeviceConnectionEffect::Applied, copiedState()}
+                        : DeviceConnectionResult{DeviceConnectionError::Unavailable,
+                            "The Gocator could not start live acquisition.",
+                            DeviceConnectionEffect::None, copiedState()};
+                } else {
+                    stop();
+                    result = {{}, {}, DeviceConnectionEffect::Applied, copiedState()};
                 }
             } catch (const std::exception& error) {
                 if (operation == Lifecycle::Discover)
@@ -349,6 +554,7 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
                         "Unexpected device backend failure.", DeviceConnectionEffect::Unknown, copiedState()};
             }
 
+            if (operation == Lifecycle::Single) finishSingle(singleRun);
             _lifecycle.endControl();
             if (operation == Lifecycle::Discover) {
                 if (discovered.result.error == DeviceConnectionError::None) emit inventoryChanged();
@@ -358,6 +564,7 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
             }
         });
     } catch (...) {
+        if (single) finishSingle(singleRun);
         _lifecycle.endControl();
         return refused(DeviceConnectionError::BackendFailure, "Could not schedule device control work.");
     }
