@@ -13,6 +13,9 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <future>
+#include <memory>
 
 /**
  * @brief Runs the Core parameter transport against the Gocator controller.
@@ -51,6 +54,20 @@ DeviceParameterResult admissionOf(const QJsonObject& response)
     return admission;
 }
 
+DeviceConnectionResult awaitConnection(const std::function<DeviceConnectionResult(
+    IDeviceConnectionControl::Completion)>& request)
+{
+    auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto future = promise->get_future();
+    const auto admission = request([promise](DeviceConnectionResult result) {
+        promise->set_value(std::move(result));
+    });
+    if (admission.error != DeviceConnectionError::None) return admission;
+    if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+        throw std::runtime_error("Missing connection completion");
+    return future.get();
+}
+
 struct Resources {
     Resources()
     {
@@ -70,6 +87,10 @@ struct Resources {
     QJsonObject scannerSchema;
     QJsonObject scannerData;
     std::vector<std::string> writes;
+    Gocator::ConnectionSnapshot snapshot{true, 4, "10.0.0.9"};
+    bool grabbing = false;
+    std::size_t grabs = 0;
+    std::size_t stops = 0;
 
     GocatorSourceController::ResourceSnapshot read(Gocator::ParameterTarget target)
     {
@@ -105,7 +126,22 @@ void GocatorParameterLoopbackTests::codecCarriesTreeSnapshotDeltaAndResync()
         return Gocator::ParameterWriteResult{true, false, {}};
     };
     controller._lifecycleAvailable = true;
-    controller._lifecycle.snapshot = [] { return Gocator::ConnectionSnapshot{true, 4, "10.0.0.9"}; };
+    controller._lifecycle.snapshot = [&resources] { return resources.snapshot; };
+    controller._lifecycle.beginControl = [] { return true; };
+    controller._lifecycle.endControl = [] {};
+    controller._lifecycle.diagnostics = [&resources] {
+        return GocatorRuntimeDiagnostics{resources.grabbing, 0, 0};
+    };
+    controller._lifecycle.grab = [&resources](std::size_t frames) {
+        if (resources.grabbing || !resources.snapshot.opened) return false;
+        ++resources.grabs;
+        resources.grabbing = true;
+        return true;
+    };
+    controller._lifecycle.stop = [&resources] {
+        ++resources.stops;
+        resources.grabbing = false;
+    };
     controller._observationInterval = std::chrono::seconds(60);
 
     Collected collected;
@@ -275,6 +311,28 @@ void GocatorParameterLoopbackTests::codecCarriesTreeSnapshotDeltaAndResync()
         std::lock_guard<std::mutex> lock(collected.mutex);
         QVERIFY(collected.changes.empty());
     }
+
+    // The same controller owns the standard acquisition lifecycle. Live does not disturb the
+    // loopback parameter authority, and Single while Live is refused without a second effect.
+    const auto connectionId = controller.currentConnectionId(4);
+    QVERIFY(controller.connectionCapabilities().single.available);
+    QVERIFY(controller.connectionCapabilities().live.available);
+    const auto live = awaitConnection([&](auto done) {
+        return controller.requestLiveStart(connectionId, done);
+    });
+    QCOMPARE(live.error, DeviceConnectionError::None);
+    QVERIFY(resources.grabbing);
+    QCOMPARE(resources.grabs, std::size_t{1});
+    const auto refusedSingle = controller.requestSingle(connectionId, [](auto) {});
+    QCOMPARE(refusedSingle.error, DeviceConnectionError::Busy);
+    QCOMPARE(refusedSingle.message, std::string("Stop Live before a single grab."));
+    QCOMPARE(resources.grabs, std::size_t{1});
+    const auto stopped = awaitConnection([&](auto done) {
+        return controller.requestLiveStop(connectionId, done);
+    });
+    QCOMPARE(stopped.error, DeviceConnectionError::None);
+    QVERIFY(!resources.grabbing);
+    QCOMPARE(resources.stops, std::size_t{1});
 
     loopback.close();
 }

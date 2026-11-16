@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -31,6 +32,10 @@ struct FakeGocator {
     std::string refusalReason;
     std::function<void()> beforeDiscover;
     bool failDiscover = false;
+    bool refuseGrab = false;
+    std::size_t singleGrabs = 0;
+    std::size_t liveGrabs = 0;
+    std::size_t stops = 0;
 };
 
 class FeatureRefreshWidget final : public QGocatorWidget {
@@ -71,6 +76,11 @@ class GocatorConnectionControlTests : public QObject {
     Q_OBJECT
 private slots:
     void lifecycleAdmissionAndStaleGeneration();
+    void singleAndLiveShareOneAuthority();
+    void pendingLiveStartBlocksSourceStart();
+    void singleStopRacingStartStaysExplicit();
+    void singleGrabThrowReleasesStartReservation();
+    void registeredCallbacksCompleteSingle();
     void connectAcceptsUndiscoveredAddress();
     void discoverPublishesCacheAndFailureStaysSilent();
     void startWithoutConnectionReportsInactive();
@@ -123,6 +133,17 @@ void GocatorConnectionControlTests::bind(GocatorSourceController& controller, Fa
         return true;
     };
     controller._lifecycle.endControl = [&fake] { fake.gate = false; };
+    controller._lifecycle.grab = [&fake](std::size_t frames) {
+        if (!fake.snapshot.opened || fake.diagnostics.grabbing || fake.refuseGrab) return false;
+        if (frames == 1) ++fake.singleGrabs;
+        else ++fake.liveGrabs;
+        fake.diagnostics.grabbing = true;
+        return true;
+    };
+    controller._lifecycle.stop = [&fake] {
+        ++fake.stops;
+        fake.diagnostics.grabbing = false;
+    };
 }
 
 namespace {
@@ -173,9 +194,10 @@ void GocatorConnectionControlTests::lifecycleAdmissionAndStaleGeneration()
     QVERIFY(capabilities.discover.available);
     QVERIFY(capabilities.connect.available);
     QVERIFY(capabilities.disconnect.available);
-    QVERIFY(!capabilities.single.available);
-    QVERIFY(!capabilities.live.available);
-    QVERIFY(capabilities.single.reason.find("source.start") != std::string::npos);
+    QVERIFY(capabilities.single.available);
+    QVERIFY(capabilities.live.available);
+    QVERIFY(capabilities.single.reason.empty());
+    QVERIFY(capabilities.live.reason.empty());
 
     const auto targets = awaitTargets(controller, [&](auto done) {
         return controller.requestConnectionTargets(done);
@@ -256,9 +278,12 @@ void GocatorConnectionControlTests::lifecycleAdmissionAndStaleGeneration()
     QCOMPARE(rediscovered.targets.size(), std::size_t{2});
 
     QCOMPARE(controller.requestSingle(firstConnection, [&](auto) { ++completions; }).error,
-        DeviceConnectionError::Unsupported);
+        DeviceConnectionError::Disconnected);
     QCOMPARE(controller.requestLiveStart(firstConnection, [&](auto) { ++completions; }).error,
-        DeviceConnectionError::Unsupported);
+        DeviceConnectionError::Disconnected);
+    QCOMPARE(controller.requestLiveStop(firstConnection, [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Disconnected);
+    QCOMPARE(completions, 0);
 
     const auto second = awaitState(controller, [&](auto done) {
         return controller.requestConnect("192.168.1.11", done);
@@ -268,6 +293,302 @@ void GocatorConnectionControlTests::lifecycleAdmissionAndStaleGeneration()
     QCOMPARE(awaitState(controller, [&](auto done) {
         return controller.requestDisconnect(second.state->connectionId, done);
     }).error, DeviceConnectionError::None);
+}
+
+void GocatorConnectionControlTests::singleAndLiveShareOneAuthority()
+{
+    FakeGocator fake;
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+
+    int completions = 0;
+    QCOMPARE(controller.requestSingle("x", [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Disconnected);
+    QCOMPARE(controller.requestLiveStart("x", [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Disconnected);
+    QCOMPARE(controller.requestLiveStop("x", [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Disconnected);
+    QCOMPARE(completions, 0);
+
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("192.168.1.10", done);
+    });
+    QVERIFY(connected.state);
+    const std::string connection = connected.state->connectionId;
+    QVERIFY(controller.connectionCapabilities().single.available);
+    QVERIFY(controller.connectionCapabilities().live.available);
+
+    // source.start and source.stop use the same authority as the lifecycle operations.
+    controller.start();
+    QCOMPARE(fake.liveGrabs, std::size_t{1});
+    QVERIFY(fake.diagnostics.grabbing);
+    controller.start();
+    QCOMPARE(fake.liveGrabs, std::size_t{1});
+
+    // Single while Live is refused with the owner wording and no producer effect.
+    const auto liveSingle = controller.requestSingle(connection, [&](auto) { ++completions; });
+    QCOMPARE(liveSingle.error, DeviceConnectionError::Busy);
+    QCOMPARE(liveSingle.message, std::string("Stop Live before a single grab."));
+    QCOMPARE(fake.singleGrabs, std::size_t{0});
+    QCOMPARE(completions, 0);
+
+    QCOMPARE(controller.requestLiveStart(connection, [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Conflict);
+    QCOMPARE(fake.liveGrabs, std::size_t{1});
+
+    controller.stop();
+    QCOMPARE(fake.stops, std::size_t{1});
+    QVERIFY(!fake.diagnostics.grabbing);
+    QCOMPARE(controller.requestLiveStop(connection, [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Conflict);
+    QCOMPARE(fake.stops, std::size_t{1});
+
+    // One single owns the acquisition until its frame is delivered and the run ends.
+    auto singlePromise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto singleFuture = singlePromise->get_future();
+    QCOMPARE(controller.requestSingle(connection, [singlePromise](DeviceConnectionResult result) {
+        singlePromise->set_value(std::move(result));
+    }).error, DeviceConnectionError::None);
+    QTRY_COMPARE(fake.singleGrabs, std::size_t{1});
+    QVERIFY(fake.diagnostics.grabbing);
+
+    const auto secondSingle = controller.requestSingle(connection, [&](auto) { ++completions; });
+    QCOMPARE(secondSingle.error, DeviceConnectionError::Busy);
+    QVERIFY(secondSingle.message.find("already in flight") != std::string::npos);
+    QCOMPARE(fake.singleGrabs, std::size_t{1});
+    QCOMPARE(completions, 0);
+
+    QCOMPARE(controller.requestLiveStart(connection, [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Busy);
+    QCOMPARE(controller.requestLiveStop(connection, [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Conflict);
+    QCOMPARE(controller.requestDisconnect(connection, [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Busy);
+    bool startRefused = false;
+    try {
+        controller.start();
+    } catch (const std::runtime_error& error) {
+        startRefused = true;
+        QCOMPARE(std::string(error.what()), std::string("A single grab is in flight."));
+    }
+    QVERIFY(startRefused);
+    QCOMPARE(fake.liveGrabs, std::size_t{1});
+    QCOMPARE(completions, 0);
+
+    controller.noteAcquisitionFrame();
+    fake.diagnostics.grabbing = false;
+    controller.noteAcquisitionEnded();
+    const auto single = singleFuture.get();
+    QCOMPARE(single.error, DeviceConnectionError::None);
+    QCOMPARE(single.effect, DeviceConnectionEffect::Applied);
+    QCOMPARE(fake.singleGrabs, std::size_t{1});
+
+    // An ended single without a frame is an explicit failure, not an optimistic success.
+    auto emptyPromise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto emptyFuture = emptyPromise->get_future();
+    QCOMPARE(controller.requestSingle(connection, [emptyPromise](DeviceConnectionResult result) {
+        emptyPromise->set_value(std::move(result));
+    }).error, DeviceConnectionError::None);
+    QTRY_COMPARE(fake.singleGrabs, std::size_t{2});
+    fake.diagnostics.grabbing = false;
+    controller.noteAcquisitionEnded();
+    const auto empty = emptyFuture.get();
+    QCOMPARE(empty.error, DeviceConnectionError::BackendFailure);
+    QVERIFY(empty.message.find("without delivering") != std::string::npos);
+
+    // source.stop aborts a pending single with its own explicit outcome.
+    auto stoppedPromise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto stoppedFuture = stoppedPromise->get_future();
+    QCOMPARE(controller.requestSingle(connection, [stoppedPromise](DeviceConnectionResult result) {
+        stoppedPromise->set_value(std::move(result));
+    }).error, DeviceConnectionError::None);
+    QTRY_COMPARE(fake.singleGrabs, std::size_t{3});
+    controller.stop();
+    const auto stopped = stoppedFuture.get();
+    QCOMPARE(stopped.error, DeviceConnectionError::BackendFailure);
+    QVERIFY(stopped.message.find("stopped before") != std::string::npos);
+
+    // Live starts again on the same connection and stops through the same authority.
+    const auto live = awaitState(controller, [&](auto done) {
+        return controller.requestLiveStart(connection, done);
+    });
+    QCOMPARE(live.error, DeviceConnectionError::None);
+    QCOMPARE(fake.liveGrabs, std::size_t{2});
+    QVERIFY(live.state && live.state->live);
+    const auto liveStop = awaitState(controller, [&](auto done) {
+        return controller.requestLiveStop(connection, done);
+    });
+    QCOMPARE(liveStop.error, DeviceConnectionError::None);
+    QCOMPARE(liveStop.effect, DeviceConnectionEffect::Applied);
+    QVERIFY(liveStop.state && !liveStop.state->live);
+
+    QCOMPARE(controller.requestSingle(connection + "-stale", [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Conflict);
+    QCOMPARE(controller.requestLiveStart(connection + "-stale", [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Conflict);
+    QCOMPARE(controller.requestLiveStop(connection + "-stale", [&](auto) { ++completions; }).error,
+        DeviceConnectionError::Conflict);
+    QCOMPARE(completions, 0);
+}
+
+void GocatorConnectionControlTests::pendingLiveStartBlocksSourceStart()
+{
+    FakeGocator fake;
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("192.168.1.10", done);
+    });
+    QVERIFY(connected.state);
+
+    // The live-start admission owns the acquisition authority before the SDK grab runs. A
+    // concurrent source.start or Single must not reach grab() and overwrite the producer.
+    std::atomic<bool> entered{false};
+    auto release = std::make_shared<std::promise<void>>();
+    auto releaseFuture = release->get_future().share();
+    controller._lifecycle.grab = [&fake, &entered, releaseFuture](std::size_t frames) {
+        entered = true;
+        releaseFuture.wait();
+        if (!fake.snapshot.opened || fake.diagnostics.grabbing || fake.refuseGrab) return false;
+        if (frames == 1) ++fake.singleGrabs;
+        else ++fake.liveGrabs;
+        fake.diagnostics.grabbing = true;
+        return true;
+    };
+
+    auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto future = promise->get_future();
+    QCOMPARE(controller.requestLiveStart(connected.state->connectionId,
+        [promise](DeviceConnectionResult result) { promise->set_value(std::move(result)); }).error,
+        DeviceConnectionError::None);
+    QTRY_VERIFY(entered.load());
+    QCOMPARE(fake.liveGrabs, std::size_t{0});
+
+    const auto single = controller.requestSingle(connected.state->connectionId, [](auto) {});
+    QCOMPARE(single.error, DeviceConnectionError::Busy);
+    QCOMPARE(single.message, std::string("Live acquisition is starting."));
+    bool startRefused = false;
+    try {
+        controller.start();
+    } catch (const std::runtime_error& error) {
+        startRefused = true;
+        QCOMPARE(std::string(error.what()), std::string("Live acquisition is already starting."));
+    }
+    QVERIFY(startRefused);
+    QCOMPARE(fake.liveGrabs, std::size_t{0});
+
+    release->set_value();
+    const auto live = future.get();
+    QCOMPARE(live.error, DeviceConnectionError::None);
+    QCOMPARE(fake.liveGrabs, std::size_t{1});
+    controller.stop();
+}
+
+void GocatorConnectionControlTests::singleGrabThrowReleasesStartReservation()
+{
+    FakeGocator fake;
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("192.168.1.10", done);
+    });
+    QVERIFY(connected.state);
+
+    controller._lifecycle.grab = [](std::size_t) -> bool {
+        throw std::runtime_error("grab boom");
+    };
+    auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto future = promise->get_future();
+    QCOMPARE(controller.requestSingle(connected.state->connectionId,
+        [promise](DeviceConnectionResult result) { promise->set_value(std::move(result)); }).error,
+        DeviceConnectionError::None);
+    const auto failed = future.get();
+    QCOMPARE(failed.error, DeviceConnectionError::BackendFailure);
+    QVERIFY(failed.message.find("grab boom") != std::string::npos);
+
+    // A thrown producer start must not leave the acquisition reservation held for the session.
+    controller._lifecycle.grab = [&fake](std::size_t frames) {
+        if (frames == 1) ++fake.singleGrabs;
+        else ++fake.liveGrabs;
+        fake.diagnostics.grabbing = true;
+        return true;
+    };
+    const auto live = awaitState(controller, [&](auto done) {
+        return controller.requestLiveStart(connected.state->connectionId, done);
+    });
+    QCOMPARE(live.error, DeviceConnectionError::None);
+    QCOMPARE(fake.liveGrabs, std::size_t{1});
+    controller.stop();
+}
+
+void GocatorConnectionControlTests::registeredCallbacksCompleteSingle()
+{
+    // The real constructor registers the producer callbacks. Drive those callbacks directly so a
+    // missing registerGrabCallback/status wiring cannot pass as a successful fake delivery.
+    Gocator gocator;
+    GocatorSourceController controller(&gocator);
+    controller._lifecycle.snapshot = [] {
+        return Gocator::ConnectionSnapshot{true, 9, "10.0.0.9"};
+    };
+    controller._lifecycle.beginControl = [] { return true; };
+    controller._lifecycle.endControl = [] {};
+    controller._lifecycle.diagnostics = [] { return GocatorRuntimeDiagnostics{}; };
+    controller._lifecycle.grab = [](std::size_t) { return true; };
+    controller._lifecycle.stop = [] {};
+
+    auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto future = promise->get_future();
+    QCOMPARE(controller.requestSingle(controller.currentConnectionId(9),
+        [promise](DeviceConnectionResult result) { promise->set_value(std::move(result)); }).error,
+        DeviceConnectionError::None);
+    QTRY_VERIFY(controller._singleInFlight.load());
+    QVERIFY(controller._singleCallbackId != 0);
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+    QVERIFY(gocator.notifyGrabCallbackForTest(controller._singleCallbackId));
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
+
+    const auto single = future.get();
+    QCOMPARE(single.error, DeviceConnectionError::None);
+    QCOMPARE(single.effect, DeviceConnectionEffect::Applied);
+}
+
+void GocatorConnectionControlTests::singleStopRacingStartStaysExplicit()
+{
+    FakeGocator fake;
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("192.168.1.10", done);
+    });
+    QVERIFY(connected.state);
+
+    // source.stop reaches the controller while the admitted single is still entering the producer.
+    // The single must not wait out its timeout for a frame that stop already forbade.
+    std::atomic<bool> entered{false};
+    auto release = std::make_shared<std::promise<void>>();
+    auto releaseFuture = release->get_future().share();
+    controller._lifecycle.grab = [&fake, &entered, releaseFuture](std::size_t frames) {
+        entered = true;
+        releaseFuture.wait();
+        if (!fake.snapshot.opened || fake.diagnostics.grabbing || fake.refuseGrab) return false;
+        if (frames == 1) ++fake.singleGrabs;
+        else ++fake.liveGrabs;
+        fake.diagnostics.grabbing = true;
+        return true;
+    };
+
+    auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto future = promise->get_future();
+    QCOMPARE(controller.requestSingle(connected.state->connectionId, [promise](DeviceConnectionResult result) {
+        promise->set_value(std::move(result));
+    }).error, DeviceConnectionError::None);
+    QTRY_VERIFY(entered.load());
+    controller.stop();
+    release->set_value();
+    const auto stopped = future.get();
+    QCOMPARE(stopped.error, DeviceConnectionError::BackendFailure);
+    QVERIFY(stopped.message.find("stopped before") != std::string::npos);
+    QVERIFY(!fake.diagnostics.grabbing);
 }
 
 void GocatorConnectionControlTests::connectAcceptsUndiscoveredAddress()

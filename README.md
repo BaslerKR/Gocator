@@ -90,11 +90,17 @@ disconnect. Targets come from the cached discovery catalog; `targetId` is the
 sensor address and the model, serial and virtual flag are descriptive
 attributes. `connectionId` is a controller-scoped connection generation, so an
 id from an earlier connection is refused as stale. Discovery is refused while
-connected or grabbing. Single and Live remain unavailable because acquisition
-uses `source.start` and `source.stop`. A shared control gate serializes
-discovery, connect and disconnect between the Qt widget and callable clients; a
-busy gate refuses with `busy`, and the widget disables its controls while
-callable work runs.
+connected or grabbing. Single and Live use the standard lifecycle over the same
+acquisition facade: `device.single` calls `grab(1)` and completes after its
+frame is delivered, while `device.live-start`/`device.live-stop` call `grab()`
+and `stop()`. `source.start`/`source.stop` share that authority and never issue
+a second start. Single while Live is refused with
+"Stop Live before a single grab." and a second Single is refused while the first
+is in flight; neither refusal has an effect. Discovery, connect and disconnect
+share one module control gate between the Qt widget and callable clients, and
+one acquisition reservation serializes `source.start` with live start so neither
+issues a second grab. A busy gate refuses with `busy`, and the widget disables
+its controls while callable work runs.
 
 Commands and Scanner/Sensor typed API targets remain explicitly unsupported;
 the existing Scanner/Sensor GUI resource editors remain available.

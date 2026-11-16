@@ -687,6 +687,25 @@ void Gocator::holdControlForTest(const std::function<void()>& entered, const std
     if (release) release();
 }
 
+bool Gocator::notifyGrabCallbackForTest(CallbackId id)
+{
+    GrabCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(_impl->grabCallbackMutex);
+        const auto found = _impl->grabCallbacks.find(id);
+        if (found == _impl->grabCallbacks.end()) return false;
+        callback = found->second;
+    }
+    GoPxLSdk::GoDataSet dataSet;
+    if (callback) callback(dataSet, 0);
+    return true;
+}
+
+void Gocator::notifyStatusForTest(Status status, bool on)
+{
+    _impl->notifyStatus(status, on);
+}
+
 std::vector<Gocator::DeviceInfo> Gocator::discoverDevices(std::string* error)
 {
     if (error) error->clear();

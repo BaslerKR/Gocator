@@ -69,6 +69,12 @@ public:
     DeviceConnectionResult requestConnect(std::string targetId, IDeviceConnectionControl::Completion completion) override;
     /** @brief Closes the exact current connection while acquisition is stopped. */
     DeviceConnectionResult requestDisconnect(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
+    /** @brief Admits one frame acquisition and completes after the producer delivered it. */
+    DeviceConnectionResult requestSingle(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
+    /** @brief Admits continuous acquisition on the exact connection. */
+    DeviceConnectionResult requestLiveStart(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
+    /** @brief Admits stopping continuous acquisition on the exact connection. */
+    DeviceConnectionResult requestLiveStop(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
 
     /** @brief Accepts the storage its 3D frames should be written into. */
     void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider) override;
@@ -83,6 +89,9 @@ private:
     friend class GocatorParameterLoopbackTests;
     friend class GocatorParameterNotificationTests;
     friend struct GocatorParameterTestAccess;
+
+    /** @brief One admitted single run; defined with the acquisition members. */
+    struct SingleRun;
 
     /** @brief One resource schema/data pair copied from the SDK. */
 public:
@@ -176,13 +185,29 @@ private:
         std::function<bool()> beginControl;
         std::function<void()> endControl;
         std::function<GocatorRuntimeDiagnostics()> diagnostics;
+        std::function<bool(std::size_t frames)> grab;
+        std::function<void()> stop;
     };
-    enum class Lifecycle { Discover, Connect, Disconnect };
+    enum class Lifecycle { Discover, Connect, Disconnect, Single, LiveStart, LiveStop };
     /** @brief Validates one lifecycle command, acquires the shared gate and schedules worker work. */
     DeviceConnectionResult admitLifecycle(Lifecycle operation, std::string argument,
         IDeviceConnectionControl::Completion completion, TargetsCompletion targetsCompletion);
     /** @brief Copies the logical connection from the shared facade and cached target facts. */
     DeviceConnectionState connectionState() const;
+    /** @brief Copies the observed producer acquisition state without SDK waits. */
+    bool liveActive() const;
+    /** @brief Starts continuous acquisition while the caller owns the start reservation. */
+    bool beginLive();
+    /** @brief Starts one acquisition run through the shared SDK seam. */
+    bool beginGrab(std::size_t frames);
+    /** @brief Reports one producer frame so a pending single can complete. */
+    void noteAcquisitionFrame();
+    /** @brief Reports the producer's end transition so a pending single can complete. */
+    void noteAcquisitionEnded();
+    /** @brief Wakes a pending single with the explicit stopped outcome. */
+    void noteAcquisitionStopped();
+    /** @brief Closes one single run before its completion is delivered. */
+    void finishSingle(const std::shared_ptr<SingleRun>& run);
     /** @brief Builds the opaque id from this controller and the module connection generation. */
     std::string currentConnectionId(std::uint64_t generation) const;
     std::optional<Gocator::DeviceInfo> cachedTarget(const std::string& targetId) const;
@@ -195,7 +220,22 @@ private:
     std::atomic<bool> _isGrabbing{false};
     std::atomic<uint64_t> _frameSeq{0};
 
+    /** @brief One admitted single run; the producer's frame and end transitions share it. */
+    struct SingleRun {
+        std::mutex mutex;
+        std::condition_variable condition;
+        bool delivered = false;
+        bool ended = false;
+        bool stopped = false;
+    };
+    std::shared_ptr<SingleRun> _singleRun;
+    std::mutex _singleMutex;
+    std::atomic<bool> _singleInFlight{false};
+    /** @brief Serializes a source.start or live-start admission before the SDK grab begins. */
+    std::atomic<bool> _acquisitionStarting{false};
+
     Gocator::CallbackId _statusCallbackId = 0;
+    Gocator::CallbackId _singleCallbackId = 0;
     std::unique_ptr<GocatorGraphicsFrameStream> _graphicsStream;
     std::shared_ptr<IFrameStorageProvider> _frameStorage;
 };
