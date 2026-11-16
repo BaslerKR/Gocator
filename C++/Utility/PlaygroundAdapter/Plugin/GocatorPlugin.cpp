@@ -154,8 +154,8 @@ private:
 
 class GocatorPlugin final : public DevicePluginTemplate {
     Q_OBJECT
-    Q_PLUGIN_METADATA(IID PlaygroundDevicePlugin_iid)
-    Q_INTERFACES(IDevicePlugin)
+    Q_PLUGIN_METADATA(IID PlaygroundDeviceRuntime_iid)
+    Q_INTERFACES(IDeviceRuntime)
 
 public:
     DevicePluginDescriptor descriptor() const override

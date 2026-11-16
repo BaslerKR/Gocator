@@ -1,6 +1,6 @@
 #pragma once
 
-#include "DeviceParameter.h"
+#include "DeviceRuntime/Contract/DeviceParameter.h"
 #include "Gocator.h"
 
 namespace gocator {

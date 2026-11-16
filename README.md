@@ -41,7 +41,7 @@ Requesting the UI without an available Qt 6 Widgets/Concurrent package is a conf
 
 The optional Playground adapter is disabled by default. Enable `GOCATOR_BUILD_PLAYGROUND_ADAPTER` only when the neutral GraphicsEngine contract target is available. Consumers that want owned frames include `Utility/PlaygroundAdapter/GocatorGraphicsFrameStream.h` and link `Gocator::PlaygroundAdapter`; GDP conversion stays in `GocatorDataSetGraphicsFrameAdapter`.
 
-The optional Playground device plugin is a separate MODULE. Enable `GOCATOR_BUILD_PLAYGROUND_PLUGIN` only when `Playground::DevicePlugin`, the adapter, and `Gocator::QtWidget` are available. Package identity lives in `Utility/PlaygroundAdapter/Package/Package.cmake` as quoted `set(PLAYGROUND_PLUGIN_* ...)` assignments; the MODULE must set `PLAYGROUND_PLUGIN_PACKAGE` and include `DevicePlugin.h`. The host emits `plugin.json` from that identity plus `DevicePluginPackage.h`.
+The optional Playground device plugin is a separate MODULE. Enable `GOCATOR_BUILD_PLAYGROUND_PLUGIN` only when `Playground::DeviceRuntimeContract`, the adapter, and `Gocator::QtWidget` are available. Package identity lives in `Utility/PlaygroundAdapter/Package/Package.cmake` as quoted `set(PLAYGROUND_PLUGIN_* ...)` assignments; the MODULE must set `PLAYGROUND_PLUGIN_PACKAGE` and include `DeviceRuntime/Contract/DeviceRuntime.h`. The host emits `plugin.json` from that identity plus `DeviceRuntime.h`.
 
 ## Acquisition Contract
 

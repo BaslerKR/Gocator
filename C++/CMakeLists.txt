@@ -26,7 +26,7 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
 endif()
 if(PROJECT_NAME STREQUAL "Gocator" AND PROJECT_IS_TOP_LEVEL AND
    (GOCATOR_BUILD_PLAYGROUND_ADAPTER OR GOCATOR_BUILD_PLAYGROUND_PLUGIN))
-    find_package(PlaygroundPluginSDK 0.2 CONFIG REQUIRED)
+    find_package(PlaygroundPluginSDK 0.3 CONFIG REQUIRED)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
@@ -295,10 +295,10 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
             "GOCATOR_BUILD_QT_UI."
         )
     endif()
-    if(NOT TARGET Playground::DevicePlugin)
+    if(NOT TARGET Playground::DeviceRuntimeContract)
         message(FATAL_ERROR
             "[Gocator] GOCATOR_BUILD_PLAYGROUND_PLUGIN=ON requires "
-            "Playground::DevicePlugin."
+            "Playground::DeviceRuntimeContract."
         )
     endif()
     if(NOT TARGET Qt6::Widgets)
@@ -309,6 +309,7 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
     find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Concurrent)
 
     add_library(GocatorPlugin MODULE
+        "${PlaygroundPluginSDK_PREFIX}/include/Playground/DeviceRuntime/Contract/AbstractSourceController.h"
         Utility/PlaygroundAdapter/Plugin/GocatorPlugin.cpp
         Utility/PlaygroundAdapter/Source/GocatorSourceController.h
         Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
@@ -326,9 +327,10 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Source"
         "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Plugin"
+        "${PlaygroundPluginSDK_WIDGET_INCLUDE_DIR}"
     )
     target_link_libraries(GocatorPlugin PRIVATE
-        Playground::DevicePlugin
+        Playground::DeviceRuntimeContract
         Gocator::QtWidget
         Gocator::PlaygroundAdapter
         Qt6::Widgets
@@ -356,13 +358,14 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
     endif()
     if(GOCATOR_BUILD_TESTS)
         add_executable(GocatorParameterControlTests
+            "${PlaygroundPluginSDK_PREFIX}/include/Playground/DeviceRuntime/Contract/AbstractSourceController.h"
             tests/GocatorParameterControlTests.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.h
             Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp)
         set_target_properties(GocatorParameterControlTests PROPERTIES AUTOMOC ON)
         target_link_libraries(GocatorParameterControlTests PRIVATE
-            Playground::DevicePlugin Gocator::QtWidget Gocator::PlaygroundAdapter Qt6::Test Qt6::Concurrent)
+            Playground::DeviceRuntimeContract Gocator::QtWidget Gocator::PlaygroundAdapter Qt6::Test Qt6::Concurrent)
         if(WIN32)
             add_test(NAME GocatorParameterControlTests COMMAND ${CMAKE_COMMAND} -E env
                 "QT_QPA_PLATFORM=offscreen"
@@ -374,13 +377,14 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
         endif()
 
         add_executable(GocatorConnectionControlTests
+            "${PlaygroundPluginSDK_PREFIX}/include/Playground/DeviceRuntime/Contract/AbstractSourceController.h"
             tests/GocatorConnectionControlTests.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.h
             Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp)
         set_target_properties(GocatorConnectionControlTests PROPERTIES AUTOMOC ON)
         target_link_libraries(GocatorConnectionControlTests PRIVATE
-            Playground::DevicePlugin Gocator::QtWidget Gocator::PlaygroundAdapter Qt6::Test Qt6::Concurrent)
+            Playground::DeviceRuntimeContract Gocator::QtWidget Gocator::PlaygroundAdapter Qt6::Test Qt6::Concurrent)
         if(WIN32)
             add_test(NAME GocatorConnectionControlTests COMMAND ${CMAKE_COMMAND} -E env
                 "QT_QPA_PLATFORM=offscreen"

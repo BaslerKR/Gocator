@@ -3,7 +3,7 @@
 #include <QtConcurrent>
 #include <stdexcept>
 #include "engine/GraphicsFrame.h"
-#include "SessionFrame.h"
+#include "DeviceRuntime/Contract/SessionFrame.h"
 #include "Utility/PlaygroundAdapter/GocatorGraphicsFrameStream.h"
 
 namespace {

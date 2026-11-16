@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Build against the widget-free device runtime SDK: the contract target is `Playground::DeviceRuntimeContract`, headers live under `DeviceRuntime/Contract`, and the interface is `IDeviceRuntime`. The temporary widget library resolves Qt Widgets and Resources itself until U2 removes it.
+
 - Deliver 3D range frames through the GraphicsEngine range writer into Playground shared frame storage. A controller that provides storage gets every range channel stored once in its slot; an empty storage result drops the frame instead of copying it elsewhere.
 
 ## v0.3.0 (2026-11-13)
@@ -63,8 +65,8 @@
 
 - Stage GoPxL dylibs in the Playground plugin `runtime` payload on macOS instead of the host `Contents/Frameworks` extra list.
 
-- Link `Playground::DevicePlugin` for the `IDevicePlugin` MODULE.
-- Own package identity in `Utility/PlaygroundAdapter/Package/Package.cmake`; the host emits `plugin.json` from `DevicePluginPackage.h`.
+- Link `Playground::DeviceRuntimeContract` for the `IDeviceRuntime` MODULE.
+- Own package identity in `Utility/PlaygroundAdapter/Package/Package.cmake`; the host emits `plugin.json` from `DeviceRuntime.h`.
 - Keep the session source controller in `Utility/PlaygroundAdapter/Source` as `GocatorSourceController`.
 - Declare the Playground plugin runtime payload from this module; the host copies it into the package.
 - Move the GraphicsFrame stream/adapter into `Utility/PlaygroundAdapter` as `Gocator::PlaygroundAdapter`.
