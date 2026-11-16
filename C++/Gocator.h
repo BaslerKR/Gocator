@@ -72,6 +72,17 @@ public:
         bool quickEditEnabled = false;
     };
 
+    /**
+     * @brief Copies the SDK outcome of one scanner or sensor resource write.
+     * @note `applied` is true only when GoPxL acknowledged the patch. `mayHaveApplied` marks an
+     *       exception after dispatch, where the device state cannot be established.
+     */
+    struct ParameterWriteResult {
+        bool applied = false;
+        bool mayHaveApplied = false;
+        std::string error; ///< SDK reason when `applied` is false; empty on success.
+    };
+
     /** @brief Distinguishes pre-command observation failure from uncertain SDK mutation. */
     class SystemControlError : public std::runtime_error {
     public:
@@ -145,12 +156,18 @@ public:
      * @param target Resource family receiving the patch.
      * @param path JSON pointer relative to that resource.
      * @param jsonValue Serialized JSON value.
+     * @return The SDK outcome. A refusal keeps the SDK reason and never claims an effect; a
+     *         dispatched exception sets `mayHaveApplied` because the device state is unknown.
+     * @note GoPxL decides whether the write is allowed while acquisition runs; this call never
+     *       applies a blanket running-state refusal.
      */
-    void setParameterValue(ParameterTarget target, const std::string& path, const std::string& jsonValue);
+    [[nodiscard]] ParameterWriteResult setParameterValue(ParameterTarget target, const std::string& path,
+        const std::string& jsonValue);
 
     std::string getParametersSchema(const std::string& type) const;
     std::string getParametersData(const std::string& type) const;
-    void setParameterValue(const std::string& type, const std::string& path, const std::string& jsonValue);
+    [[nodiscard]] ParameterWriteResult setParameterValue(const std::string& type, const std::string& path,
+        const std::string& jsonValue);
 
     void grab(size_t frames = 0);
     void stop();

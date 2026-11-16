@@ -1,14 +1,25 @@
 #include "GocatorDataSetGraphicsFrameAdapter.h"
 #include "GocatorRangeConversion.h"
+#include "Internal/GocatorSdkRuntime.h"
 
 #include "graphics/data/GraphicsRangeFrameWriter.h"
 
 #include <GoPxLSdk/GoDataSet.h>
+#include <GoPxLSdk/GoGdpMsg/GoGdpProfilePointCloud.h>
+#include <GoPxLSdk/GoGdpMsg/GoGdpProfileUniform.h>
+#include <GoPxLSdk/GoGdpMsg/GoGdpStamp.h>
+#include <GoPxLSdk/GoGdpMsg/GoGdpSurfacePointCloud.h>
+#include <GoPxLSdk/GoGdpMsg/GoGdpSurfaceUniform.h>
+#include <kApi/Data/kArray1.h>
+#include <kApi/Data/kArray2.h>
 
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace {
@@ -34,18 +45,274 @@ struct RecordingStorage
 
 } // namespace
 
+/**
+ * @brief Test-owned friend of the GoPxL message classes.
+ *
+ * The SDK headers declare this exact global class as a friend so their own tests can fill
+ * message fields without a serializer. This suite uses the same seam to build the synthetic
+ * `GoDataSet` inputs the Gocator adapter consumes; production code never depends on it.
+ */
+class GoGdpMsgTests
+{
+public:
+    template <typename Message>
+    static void setDataSetId(Message& message, const k64u id)
+    {
+        message.attributes.dataSetId = id;
+    }
+
+    static void setStamp(GoPxLSdk::GoGdpStamp& message, const k64u frameIndex)
+    {
+        message.frameIndex = frameIndex;
+    }
+
+    static void setUniformSurface(GoPxLSdk::GoGdpSurfaceUniform& message,
+                                  const k32u width,
+                                  const k32u height,
+                                  const kPoint3d64f& resolution,
+                                  const kPoint3d64f& offset,
+                                  const std::vector<k16s>& ranges,
+                                  const std::vector<k16u>& intensities,
+                                  const k32u intensityWidth = 0,
+                                  const k32u intensityLength = 0)
+    {
+        assert(ranges.size() == std::size_t(width) * std::size_t(height));
+        message.width = width;
+        message.length = height;
+        message.resolution = resolution;
+        message.offset = offset;
+        kArray2_Construct(message.ranges.Ref(), kTypeOf(k16s), height, width, kNULL);
+        std::memcpy(kArray2_DataT(message.ranges.Get(), k16s), ranges.data(),
+            ranges.size() * sizeof(k16s));
+        if (!intensities.empty())
+        {
+            const k32u columns = intensityWidth != 0 ? intensityWidth : width;
+            const k32u rows = intensityLength != 0 ? intensityLength : height;
+            assert(intensities.size() == std::size_t(columns) * std::size_t(rows));
+            message.intensityWidth = columns;
+            message.intensityLength = rows;
+            kArray2_Construct(message.intensities.Ref(), kTypeOf(k16u), rows, columns, kNULL);
+            std::memcpy(kArray2_DataT(message.intensities.Get(), k16u), intensities.data(),
+                intensities.size() * sizeof(k16u));
+        }
+    }
+
+    static void setSurfacePointCloud(GoPxLSdk::GoGdpSurfacePointCloud& message,
+                                     const k32u width,
+                                     const k32u height,
+                                     const kPoint3d64f& resolution,
+                                     const kPoint3d64f& offset,
+                                     const std::vector<kPoint3d16s>& points,
+                                     const std::vector<k16u>& intensities = {})
+    {
+        assert(points.size() == std::size_t(width) * std::size_t(height));
+        message.width = width;
+        message.length = height;
+        message.resolution = resolution;
+        message.offset = offset;
+        kArray2_Construct(message.ranges.Ref(), kTypeOf(kPoint3d16s), height, width, kNULL);
+        std::memcpy(kArray2_DataT(message.ranges.Get(), kPoint3d16s), points.data(),
+            points.size() * sizeof(kPoint3d16s));
+        if (!intensities.empty())
+        {
+            assert(intensities.size() == points.size());
+            message.intensityWidth = width;
+            message.intensityLength = height;
+            kArray2_Construct(message.intensities.Ref(), kTypeOf(k16u), height, width, kNULL);
+            std::memcpy(kArray2_DataT(message.intensities.Get(), k16u), intensities.data(),
+                intensities.size() * sizeof(k16u));
+        }
+    }
+
+    static void setUniformProfile(GoPxLSdk::GoGdpProfileUniform& message,
+                                  const k32u width,
+                                  const kPoint3d64f& resolution,
+                                  const kPoint3d64f& offset,
+                                  const std::vector<k16s>& ranges,
+                                  const std::vector<k8u>& intensities = {})
+    {
+        assert(ranges.size() == std::size_t(width));
+        message.width = width;
+        message.resolution = resolution;
+        message.offset = offset;
+        kArray1_Construct(message.ranges.Ref(), kTypeOf(k16s), width, kNULL);
+        std::memcpy(kArray1_DataT(message.ranges.Get(), k16s), ranges.data(),
+            ranges.size() * sizeof(k16s));
+        if (!intensities.empty())
+        {
+            assert(intensities.size() == ranges.size());
+            message.intensityWidth = width;
+            kArray1_Construct(message.intensities.Ref(), kTypeOf(k8u), width, kNULL);
+            std::memcpy(kArray1_DataT(message.intensities.Get(), k8u), intensities.data(),
+                intensities.size() * sizeof(k8u));
+        }
+    }
+
+    static void setProfilePointCloud(GoPxLSdk::GoGdpProfilePointCloud& message,
+                                     const k32u width,
+                                     const kPoint3d64f& resolution,
+                                     const kPoint3d64f& offset,
+                                     const std::vector<kPoint16s>& points)
+    {
+        assert(points.size() == std::size_t(width));
+        message.width = width;
+        message.resolution = resolution;
+        message.offset = offset;
+        kArray1_Construct(message.ranges.Ref(), kTypeOf(kPoint16s), width, kNULL);
+        std::memcpy(kArray1_DataT(message.ranges.Get(), kPoint16s), points.data(),
+            points.size() * sizeof(kPoint16s));
+    }
+};
+
+namespace {
+
+void expectArray(const GraphicsSampleBuffer<float>& values,
+                 const std::vector<float>& expected,
+                 const char* what)
+{
+    assert(values.size() == expected.size());
+    for (std::size_t index = 0; index < expected.size(); ++index)
+    {
+        if (values[index] != expected[index])
+        {
+            std::fprintf(stderr, "%s[%zu] = %f, expected %f\n", what, index,
+                static_cast<double>(values[index]), static_cast<double>(expected[index]));
+            assert(false);
+        }
+    }
+}
+
+void expectMask(const GraphicsSampleBuffer<std::uint8_t>& values,
+                const std::vector<std::uint8_t>& expected)
+{
+    assert(values.size() == expected.size());
+    for (std::size_t index = 0; index < expected.size(); ++index)
+    {
+        assert(values[index] == expected[index]);
+    }
+}
+
+void expectRange(const RangeFrame& frame,
+                 const int width,
+                 const int height,
+                 const RangeFrameXYCoordinateMode xyMode,
+                 const double xScale,
+                 const double yScale,
+                 const double xOffset,
+                 const double yOffset)
+{
+    assert(frame.isValid());
+    assert(frame.width == width);
+    assert(frame.height == height);
+    assert(frame.lengthUnit == GraphicsLengthUnit::Millimeter);
+    assert(frame.xyCoordinateMode == xyMode);
+    assert(frame.xScale == xScale);
+    assert(frame.yScale == yScale);
+    assert(frame.zScale == 1.0);
+    assert(frame.xOffset == xOffset);
+    assert(frame.yOffset == yOffset);
+    assert(frame.zOffset == 0.0);
+    assert(frame.sensorType == "LMI Gocator");
+    assert(frame.rangeField.id == "gocator.range");
+    assert(frame.rangeField.displayName == "Range");
+    assert(frame.rangeField.unitSymbol == "mm");
+    assert(frame.rangeField.domain == MeasurementValueDomain::Calibrated);
+    assert(frame.rangeField.sampleKind == MeasurementSampleKind::GridSample);
+    assert(frame.rangeField.bitsPerSample == 16U);
+    assert(frame.intensityField.id == "gocator.intensity");
+    assert(frame.intensityField.displayName == "Intensity");
+    assert(frame.intensityField.unitSymbol.empty());
+    assert(frame.intensityField.domain == MeasurementValueDomain::Native);
+    assert(frame.intensityField.sampleKind == MeasurementSampleKind::GridSample);
+}
+
+std::shared_ptr<GoPxLSdk::GoGdpStamp> stamp(const k64u frameIndex)
+{
+    auto value = std::make_shared<GoPxLSdk::GoGdpStamp>();
+    GoGdpMsgTests::setStamp(*value, frameIndex);
+    return value;
+}
+
+/** The calibrated surface used by the Playground 3D codec parity fixture. */
+void expectCalibratedSurface(const GraphicsFrame& converted)
+{
+    assert(converted.ranges.size() == 1U);
+    assert(converted.images.empty());
+    assert(converted.pointClouds.empty());
+    assert(converted.surfaces.empty());
+    assert(converted.ranges.front().descriptor.id == "range");
+    assert(converted.ranges.front().descriptor.displayName == "Range");
+    const RangeFrame& range = converted.ranges.front().payload;
+    expectRange(range, 3, 2, RangeFrameXYCoordinateMode::UniformPhysical, 0.5, 0.25, 10.0, 20.0);
+    expectArray(range.zValues, {1.0F, 3.0F, 0.0F, 7.0F, 0.0F, 11.0F}, "surface Z");
+    expectMask(range.validMask, {1U, 1U, 0U, 1U, 0U, 1U});
+    expectArray(range.intensity, {10.0F, 20.0F, 30.0F, 40.0F, 50.0F, 60.0F}, "surface intensity");
+    assert(range.intensityBits == 16U);
+    assert(range.intensityField.bitsPerSample == 16U);
+    assert(range.rangeBits == 0U);
+    assert(range.frameId == "42");
+    assert(converted.metadata.sourceName == "LMI Gocator");
+    assert(converted.metadata.frameId == "42");
+    assert(converted.metadata.frameIndex == 42U);
+}
+
+} // namespace
+
 int main()
 {
+    // Builds the kApi type and allocator assembly the synthetic message arrays need.
+    gocator::GocatorSdkRuntime::ensureInitialized();
     GoPxLSdk::GoDataSet empty;
     GocatorDataSetGraphicsFrameAdapter adapter;
 
     GraphicsFrameRequest rangeRequest;
     rangeRequest.components = GraphicsFrameComponent::Range;
+    rangeRequest.includeRangeAuxiliaryChannels = true;
     assert(!adapter.convertFrame(empty, rangeRequest).has_value());
 
     GraphicsFrameRequest pointCloudOnly;
     pointCloudOnly.components = GraphicsFrameComponent::PointCloud;
     assert(!adapter.convertFrame(empty, pointCloudOnly).has_value());
+
+    // Synthetic uniform surface with a stamp, auxiliary intensity, null sensor
+    // codes and calibration. The adapter must keep every field and store the
+    // samples exactly once through the provided storage.
+    {
+        RecordingStorage storage;
+        adapter.setFrameStorage(storage.function());
+        GoPxLSdk::GoDataSet dataSet;
+        dataSet.Add(stamp(42));
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        GoGdpMsgTests::setUniformSurface(*surface, 3, 2,
+            {0.5, 0.25, 2.0}, {10.0, 20.0, -1.0},
+            {1, 2, gocator_range::kNullSample, 4, gocator_range::kNullSample, 6},
+            {10, 20, 30, 40, 50, 60});
+        dataSet.Add(surface);
+        const auto converted = adapter.convertFrame(dataSet, rangeRequest);
+        assert(converted.has_value());
+        expectCalibratedSurface(*converted);
+        assert(storage.calls == 1U);
+        const auto* samples = reinterpret_cast<const std::uint8_t*>(
+            converted->ranges.front().payload.zValues.data());
+        assert(samples >= storage.block.get() && samples < storage.block.get() + storage.bytes);
+    }
+
+    // The same input without provided storage still converts, through the
+    // adapter's own block, so an in-process call is not tied to the Host pool.
+    {
+        adapter.setFrameStorage({});
+        GoPxLSdk::GoDataSet dataSet;
+        dataSet.Add(stamp(42));
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        GoGdpMsgTests::setUniformSurface(*surface, 3, 2,
+            {0.5, 0.25, 2.0}, {10.0, 20.0, -1.0},
+            {1, 2, gocator_range::kNullSample, 4, gocator_range::kNullSample, 6},
+            {10, 20, 30, 40, 50, 60});
+        dataSet.Add(surface);
+        const auto converted = adapter.convertFrame(dataSet, rangeRequest);
+        assert(converted.has_value());
+        expectCalibratedSurface(*converted);
+    }
 
     // Uniform surface/profile conversion: null sensor codes stay zero and set
     // the mask; valid codes keep the adapter's resolution/offset math.
@@ -83,58 +350,92 @@ int main()
     // Surface point cloud conversion keeps per-axis calibration and clears the
     // whole tuple when any component is null.
     {
-        GraphicsRangeFrameLayout layout;
-        layout.width = 2;
-        layout.height = 1;
-        layout.channels.x = true;
-        layout.channels.y = true;
-        layout.channels.validMask = true;
         RecordingStorage storage;
-        GraphicsRangeFrameWriter writer(layout, storage.function());
-        assert(writer.isValid());
-
-        const std::int16_t points[] = {2, 3, 4, gocator_range::kNullSample, 1, 2};
-        assert(gocator_range::surfacePointsHaveInvalid(points, 2));
-        gocator_range::writeSurfacePoints(points, 2,
-            0.5, 0.25, 2.0, 10.0, 20.0, -1.0,
-            writer.xData(), writer.yData(), writer.zData(), writer.validMaskData());
-        const RangeFrame frame = writer.takeFrame();
-        assert(frame.xValues[0] == 11.0F);
-        assert(frame.yValues[0] == 20.75F);
-        assert(frame.zValues[0] == 7.0F);
-        assert(frame.validMask[0] == 1U);
-        assert(frame.xValues[1] == 0.0F);
-        assert(frame.yValues[1] == 0.0F);
-        assert(frame.zValues[1] == 0.0F);
-        assert(frame.validMask[1] == 0U);
+        adapter.setFrameStorage(storage.function());
+        GoPxLSdk::GoDataSet dataSet;
+        dataSet.Add(stamp(7));
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfacePointCloud>();
+        GoGdpMsgTests::setSurfacePointCloud(*surface, 2, 1,
+            {0.5, 0.25, 2.0}, {10.0, 20.0, -1.0},
+            {{2, 3, 4}, {gocator_range::kNullSample, 1, 2}},
+            {7, 8});
+        dataSet.Add(surface);
+        const auto converted = adapter.convertFrame(dataSet, rangeRequest);
+        assert(converted.has_value());
+        const RangeFrame& frame = converted->ranges.front().payload;
+        expectRange(frame, 2, 1, RangeFrameXYCoordinateMode::ExplicitXY, 0.5, 0.25, 10.0, 20.0);
+        expectArray(frame.xValues, {11.0F, 0.0F}, "surface X");
+        expectArray(frame.yValues, {20.75F, 0.0F}, "surface Y");
+        expectArray(frame.zValues, {7.0F, 0.0F}, "surface Z");
+        expectMask(frame.validMask, {1U, 0U});
+        expectArray(frame.intensity, {7.0F, 8.0F}, "surface intensity");
+        assert(frame.frameId == "7");
+        assert(storage.calls == 1U);
     }
 
     // Profile point clouds map the second sample to Z and zero the Y channel.
     {
-        GraphicsRangeFrameLayout layout;
-        layout.width = 2;
-        layout.height = 1;
-        layout.channels.x = true;
-        layout.channels.y = true;
-        layout.channels.validMask = true;
         RecordingStorage storage;
-        GraphicsRangeFrameWriter writer(layout, storage.function());
-        assert(writer.isValid());
-        std::fill_n(writer.yData(), 2, 0.0F);
+        adapter.setFrameStorage(storage.function());
+        GoPxLSdk::GoDataSet dataSet;
+        dataSet.Add(stamp(77));
+        auto profile = std::make_shared<GoPxLSdk::GoGdpProfilePointCloud>();
+        GoGdpMsgTests::setProfilePointCloud(*profile, 2,
+            {2.0, 0.0, 0.5}, {10.0, 0.0, -1.0},
+            {{1, 2}, {gocator_range::kNullSample, 3}});
+        dataSet.Add(profile);
+        const auto converted = adapter.convertFrame(dataSet, rangeRequest);
+        assert(converted.has_value());
+        const RangeFrame& frame = converted->ranges.front().payload;
+        expectRange(frame, 2, 1, RangeFrameXYCoordinateMode::ExplicitXY, 2.0, 1.0, 10.0, 0.0);
+        expectArray(frame.xValues, {12.0F, 0.0F}, "profile X");
+        expectArray(frame.yValues, {0.0F, 0.0F}, "profile Y");
+        expectArray(frame.zValues, {0.0F, 0.0F}, "profile Z");
+        expectMask(frame.validMask, {1U, 0U});
+        assert(frame.intensity.empty());
+        assert(frame.frameId == "77");
+        assert(storage.calls == 1U);
+    }
 
-        const std::int16_t points[] = {1, 2, gocator_range::kNullSample, 3};
-        assert(gocator_range::profilePointsHaveInvalid(points, 2));
-        gocator_range::writeProfilePoints(points, 2, 2.0, 0.5, 10.0, -1.0,
-            writer.xData(), writer.zData(), writer.validMaskData());
-        const RangeFrame frame = writer.takeFrame();
-        assert(frame.xValues[0] == 12.0F);
-        assert(frame.zValues[0] == 0.0F);
-        assert(frame.validMask[0] == 1U);
-        assert(frame.xValues[1] == 0.0F);
-        assert(frame.zValues[1] == 0.0F);
-        assert(frame.validMask[1] == 0U);
-        assert(frame.yValues[0] == 0.0F);
-        assert(frame.yValues[1] == 0.0F);
+    // Uniform profiles use a single row, eight-bit intensity and the dataset id
+    // as the frame identity when the sensor sends no stamp.
+    {
+        RecordingStorage storage;
+        adapter.setFrameStorage(storage.function());
+        GoPxLSdk::GoDataSet dataSet;
+        auto profile = std::make_shared<GoPxLSdk::GoGdpProfileUniform>();
+        GoGdpMsgTests::setDataSetId(*profile, 9U);
+        GoGdpMsgTests::setUniformProfile(*profile, 3,
+            {0.0, 0.0, 0.5}, {0.0, 0.0, -1.0},
+            {5, gocator_range::kNullSample, 7},
+            {1, 2, 3});
+        dataSet.Add(profile);
+        const auto converted = adapter.convertFrame(dataSet, rangeRequest);
+        assert(converted.has_value());
+        const RangeFrame& frame = converted->ranges.front().payload;
+        expectRange(frame, 3, 1, RangeFrameXYCoordinateMode::UniformPhysical, 1.0, 1.0, 0.0, 0.0);
+        expectArray(frame.zValues, {1.5F, 0.0F, 2.5F}, "profile Z");
+        expectMask(frame.validMask, {1U, 0U, 1U});
+        expectArray(frame.intensity, {1.0F, 2.0F, 3.0F}, "profile intensity");
+        assert(frame.intensityBits == 8U);
+        assert(frame.intensityField.bitsPerSample == 8U);
+        assert(frame.frameId == "9");
+        assert(converted->metadata.frameIndex == 9U);
+        assert(storage.calls == 1U);
+    }
+
+    // A refused provided-storage request drops the frame instead of falling
+    // back to an adapter-owned block.
+    {
+        adapter.setFrameStorage([](std::size_t) { return std::shared_ptr<std::uint8_t>(); });
+        GoPxLSdk::GoDataSet dataSet;
+        dataSet.Add(stamp(1));
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        GoGdpMsgTests::setUniformSurface(*surface, 2, 1,
+            {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {1, 2}, {});
+        dataSet.Add(surface);
+        assert(!adapter.convertFrame(dataSet, rangeRequest).has_value());
+        adapter.setFrameStorage({});
     }
 
     // All-valid input omits the mask, matching the previous clear-on-valid rule.

@@ -11,6 +11,7 @@ private slots:
     void preservesAcknowledgedEffectWhenReadbackFails();
     void unsupportedAndDisconnectedHaveNoEffects();
     void failedSdkDispatchHasUnknownEffect();
+    void writeWhileRunningFollowsSensorResult();
     void busyAdmissionAndTeardownDrain();
 };
 
@@ -144,6 +145,69 @@ void GocatorParameterControlTests::failedSdkDispatchHasUnknownEffect()
     QCOMPARE(result.error, DeviceParameterError::BackendFailure);
     QCOMPARE(result.effect, DeviceParameterEffect::Unknown);
     QVERIFY(!result.descriptor);
+}
+
+void GocatorParameterControlTests::writeWhileRunningFollowsSensorResult()
+{
+    using Error = DeviceParameterError;
+    using Effect = DeviceParameterEffect;
+    GocatorSourceController controller(nullptr);
+    Gocator::SystemState state{5, Gocator::SystemState::Running::Running, false};
+    int writes = 0;
+    controller._systemConnected = [] { return true; };
+    controller._readSystem = [&] { return state; };
+    controller._writeQuickEdit = [&](bool enabled, auto) {
+        ++writes;
+        state.quickEditEnabled = enabled;
+    };
+
+    // The controller has no blanket "grabbing" refusal: a running sensor that accepts the write
+    // reports Applied. The fake SDK is the only authority here.
+    auto inventory = awaitResult<DeviceParameterInventory>(controller, [&](auto done) {
+        return controller.requestParameters(done);
+    });
+    controller._parameterWork.waitForFinished();
+    const auto quick = inventory.parameters[1];
+    auto accepted = awaitResult<DeviceParameterResult>(controller, [&](auto done) {
+        return controller.requestWriteParameter(quick.target, true, quick.revision, done);
+    });
+    controller._parameterWork.waitForFinished();
+    QCOMPARE(accepted.error, Error::None);
+    QCOMPARE(accepted.effect, Effect::Applied);
+    QCOMPARE(writes, 1);
+
+    // When GoSystem/GoPxL refuses the same write while running, its reason reaches the caller
+    // unchanged and no effect is claimed.
+    controller._writeQuickEdit = [&](bool, auto) {
+        ++writes;
+        throw Gocator::SystemControlError("GoPxL refused the write while running", false);
+    };
+    QVERIFY(accepted.descriptor);
+    auto refused = awaitResult<DeviceParameterResult>(controller, [&](auto done) {
+        return controller.requestWriteParameter(accepted.descriptor->target, false,
+            accepted.descriptor->revision, done);
+    });
+    controller._parameterWork.waitForFinished();
+    QCOMPARE(refused.error, Error::BackendFailure);
+    QCOMPARE(refused.effect, Effect::None);
+    QVERIFY(QString::fromStdString(refused.message).contains(
+        QStringLiteral("GoPxL refused the write while running")));
+    QCOMPARE(writes, 2);
+
+    // An uncertain SDK completion keeps the reason and reports Unknown.
+    controller._writeQuickEdit = [&](bool, auto) {
+        ++writes;
+        throw Gocator::SystemControlError("GoPxL write reply lost", true);
+    };
+    auto unknown = awaitResult<DeviceParameterResult>(controller, [&](auto done) {
+        return controller.requestWriteParameter(accepted.descriptor->target, false,
+            accepted.descriptor->revision, done);
+    });
+    controller._parameterWork.waitForFinished();
+    QCOMPARE(unknown.error, Error::BackendFailure);
+    QCOMPARE(unknown.effect, Effect::Unknown);
+    QVERIFY(QString::fromStdString(unknown.message).contains(QStringLiteral("reply lost")));
+    QCOMPARE(writes, 3);
 }
 
 void GocatorParameterControlTests::busyAdmissionAndTeardownDrain()
