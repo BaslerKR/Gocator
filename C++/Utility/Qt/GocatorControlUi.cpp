@@ -115,7 +115,7 @@ void GocatorControlUi::create(QWidget* owner) {
 
     _fpsLabel = new QLabel(owner);
     _fpsLabel->setObjectName(QStringLiteral("GocatorStatusFps"));
-    _fpsLabel->setProperty("statusRole", QStringLiteral("deviceFps"));
+    _fpsLabel->setProperty("statusRole", QStringLiteral("deviceCounter"));
     _fpsLabel->setAlignment(Qt::AlignCenter);
     _fpsLabel->hide();
     _statusBar->addPermanentWidget(_fpsLabel);

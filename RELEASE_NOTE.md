@@ -1,5 +1,6 @@
 ## Unreleased
 
+- Use the shared Resources `deviceCounter` statusbar bubble for live fps telemetry instead of the removed `deviceFps` role; the monospace presentation is unchanged.
 - Build against the widget-free device runtime SDK: the contract target is `Playground::DeviceRuntimeContract`, headers live under `DeviceRuntime/Contract`, and the interface is `IDeviceRuntime`. The temporary widget library resolves Qt Widgets and Resources itself until U2 removes it.
 - Expose the System, Scanner and Sensor parameter scopes as one typed tree: GoPxL schema labels, nested category paths, enum labels, numeric bounds, units, read-only access and per-parameter revisions. Scanner and sensor leaves write through JSON-pointer paths with an actual readback.
 - Add module-owned parameter change subscriptions over the same tree. A bounded queue turns overflow into one explicit resync snapshot; observation runs on a module thread only while a subscription is active, so no GUI timer polls the sensor. Writability is re-observed after acquisition changes and after every write instead of being cached from a locked state.
