@@ -31,16 +31,6 @@ constexpr const char* INTENSITY_PARAMETER_PATH = "/parameters/scanModeSettings/i
 constexpr const char* UNIFORM_SPACING_PARAMETER_PATH = "/parameters/scanModeSettings/uniformSpacingEnabled";
 constexpr const char* EXPOSURE_PARAMETER_PATH = "/parameters/exposureSettings/singleExposure";
 
-[[nodiscard]] const char* scanModeName(Gocator::ScanMode mode)
-{
-    return mode == Gocator::ScanMode::SurfaceMode ? "Surface" : "Profile";
-}
-
-[[nodiscard]] const char* onOff(bool enabled)
-{
-    return enabled ? "on" : "off";
-}
-
 [[nodiscard]] Gocator::ParameterTarget parameterTargetFromString(const std::string& type)
 {
     if (type == "system") return Gocator::ParameterTarget::System;
@@ -252,8 +242,9 @@ struct Gocator::Impl
         }
     }
 
-    bool open(const std::string& ip)
+    bool open(const std::string& ip, std::string* error)
     {
+        if (error) error->clear();
         std::lock_guard<std::recursive_mutex> lock(controlMutex);
         if (isOpened.load())
         {
@@ -286,6 +277,8 @@ struct Gocator::Impl
         }
         catch (const std::exception& e)
         {
+            // Keep the SDK reason: an address that was not discovered may still be refused.
+            if (error) *error = e.what();
             Gocator::syslog("Gocator open failed: " + std::string(e.what()), true);
             close();
             return false;
@@ -334,50 +327,34 @@ struct Gocator::Impl
         }
     }
 
-    void configure(double scanLengthMm, ScanMode mode, bool intensityEnabled, bool uniformSpacingEnabled, int exposureUs)
+    /** @brief Installs the control output the current scan mode needs before GDP reception starts.
+     *  @note Output selection is acquisition setup, not a parameter write. Callers set scan
+     *        settings through explicit parameter writes; this function only mirrors the mode the
+     *        sensor currently reports so a grab can publish frames.
+     */
+    void prepareOutputs()
     {
-        if (!isOpened.load())
-        {
-            Gocator::syslog("Configure skipped: Gocator is not connected.", true);
-            return;
-        }
+        if (!isOpened.load() || !resources) return;
 
         try
         {
-            Gocator::syslog("Configuring Gocator scan: mode=" + std::string(scanModeName(mode))
-                + " scanLengthMm=" + std::to_string(scanLengthMm)
-                + " intensity=" + onOff(intensityEnabled)
-                + " uniformSpacing=" + onOff(uniformSpacingEnabled)
-                + " exposureUs=" + std::to_string(exposureUs) + ".");
-
             const std::string engineId = detectEngineId(*resources);
             const std::string scannerPath = "/scan/engines/" + engineId + "/scanners/scanner-0";
-            const std::string sensorPath = scannerPath + "/sensors/sensor-0";
-
-            int sdkScanMode = 2;
-            if (mode == ScanMode::SurfaceMode)
+            ScanMode mode = ScanMode::ProfileMode;
+            try
             {
-                sdkScanMode = 3;
+                const auto data = resources->data(scannerPath);
+                if (data.At("/parameters/scanModeSettings/scanMode").Get<int>() == 3)
+                {
+                    mode = ScanMode::SurfaceMode;
+                }
+            }
+            catch (...)
+            {
+                // A firmware variant without scanModeSettings keeps the profile output.
             }
 
-            std::string payload = R"({"parameters":{"scanModeSettings":{)"
-                                  R"("scanMode":)" + std::to_string(sdkScanMode) + R"(,)"
-                                  R"("intensityEnabled":)" + (intensityEnabled ? "true" : "false") + R"(,)"
-                                  R"("uniformSpacingEnabled":)" + (uniformSpacingEnabled ? "true" : "false") +
-                                  R"(}}})";
-            resources->update(scannerPath, GoPxLSdk::GoJson(payload));
-
-            std::string exposurePayload = R"({"parameters":{"exposureSettings":{)"
-                                          R"("exposureMode":0,)"
-                                          R"("singleExposure":)" + std::to_string(exposureUs) +
-                                          R"(}}})";
-            resources->update(sensorPath, GoPxLSdk::GoJson(exposurePayload));
-
-            std::string scanLengthPayload = R"({"parameters":{"scanModeSettings":{"scanLengthMm":)" + std::to_string(scanLengthMm) + R"(}}})";
-            resources->update(scannerPath, GoPxLSdk::GoJson(scanLengthPayload));
-
             resources->update(GOCATOR_CONTROL_PATH, GoPxLSdk::GoJson(R"({"enabled": true})"));
-
             try
             {
                 resources->call(GOCATOR_REMOVE_ALL_OUTPUT_PATH, GoPxLSdk::GoJson("{}"));
@@ -387,11 +364,12 @@ struct Gocator::Impl
             const std::string sourceId = profileSourceForEngine(engineId, mode);
             std::string addOutputPayload = R"({"source":")" + sourceId + R"(","outputId":0,"autoShift":true})";
             resources->call(GOCATOR_ADD_OUTPUT_PATH, GoPxLSdk::GoJson(addOutputPayload));
-            Gocator::syslog("Gocator scan configured: engine=" + engineId + " source=" + sourceId + ".");
+            Gocator::syslog("Gocator acquisition output: engine=" + engineId + " source=" + sourceId + ".");
         }
         catch (const std::exception& e)
         {
-            Gocator::syslog("Gocator configure failed: " + std::string(e.what()), true);
+            // Output setup failure is reported; the producer itself decides whether it starts.
+            Gocator::syslog("Gocator acquisition output setup failed: " + std::string(e.what()), true);
         }
     }
 
@@ -447,6 +425,9 @@ struct Gocator::Impl
         {
             Gocator::syslog("Starting Gocator grab: frames="
                 + std::string(frames == 0 ? "continuous" : std::to_string(frames)) + ".");
+            // Scan values are written explicitly by the caller before start; only the transport
+            // output the producer needs is prepared here.
+            prepareOutputs();
             gdpClient = std::make_unique<GoPxLSdk::GoGdpClient>();
             gdpClient->Connect(connection->system().Address(), connection->gdpPort());
             Gocator::syslog("Gocator GDP connected: gdpPort=" + std::to_string(connection->gdpPort()) + ".");
@@ -639,7 +620,12 @@ void Gocator::clearGrabCallbacks()
 
 bool Gocator::open(const std::string& ipAddress)
 {
-    return _impl->open(ipAddress);
+    return _impl->open(ipAddress, nullptr);
+}
+
+bool Gocator::open(const std::string& ipAddress, std::string* error)
+{
+    return _impl->open(ipAddress, error);
 }
 
 bool Gocator::isOpened() const
@@ -769,41 +755,35 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices(std::string* error)
     return result;
 }
 
-void Gocator::configure(double scanLengthMm, ScanMode mode, bool intensityEnabled, bool uniformSpacingEnabled, int exposureUs)
+Gocator::ParameterWriteResult Gocator::setScanLengthMm(double length)
 {
     std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
-    _impl->configure(scanLengthMm, mode, intensityEnabled, uniformSpacingEnabled, exposureUs);
+    return _impl->setParameterValue(ParameterTarget::Scanner, SCAN_LENGTH_PARAMETER_PATH, std::to_string(length));
 }
 
-void Gocator::setScanLengthMm(double length)
-{
-    std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
-    _impl->setParameterValue(ParameterTarget::Scanner, SCAN_LENGTH_PARAMETER_PATH, std::to_string(length));
-}
-
-void Gocator::setScanMode(ScanMode mode)
+Gocator::ParameterWriteResult Gocator::setScanMode(ScanMode mode)
 {
     std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
     const int value = (mode == ScanMode::SurfaceMode) ? 3 : 2;
-    _impl->setParameterValue(ParameterTarget::Scanner, SCAN_MODE_PARAMETER_PATH, std::to_string(value));
+    return _impl->setParameterValue(ParameterTarget::Scanner, SCAN_MODE_PARAMETER_PATH, std::to_string(value));
 }
 
-void Gocator::setExposureUs(int exposure)
+Gocator::ParameterWriteResult Gocator::setExposureUs(int exposure)
 {
     std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
-    _impl->setParameterValue(ParameterTarget::Sensor, EXPOSURE_PARAMETER_PATH, std::to_string(exposure));
+    return _impl->setParameterValue(ParameterTarget::Sensor, EXPOSURE_PARAMETER_PATH, std::to_string(exposure));
 }
 
-void Gocator::setIntensityEnabled(bool enable)
+Gocator::ParameterWriteResult Gocator::setIntensityEnabled(bool enable)
 {
     std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
-    _impl->setParameterValue(ParameterTarget::Scanner, INTENSITY_PARAMETER_PATH, enable ? "true" : "false");
+    return _impl->setParameterValue(ParameterTarget::Scanner, INTENSITY_PARAMETER_PATH, enable ? "true" : "false");
 }
 
-void Gocator::setUniformSpacingEnabled(bool enable)
+Gocator::ParameterWriteResult Gocator::setUniformSpacingEnabled(bool enable)
 {
     std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
-    _impl->setParameterValue(ParameterTarget::Scanner, UNIFORM_SPACING_PARAMETER_PATH, enable ? "true" : "false");
+    return _impl->setParameterValue(ParameterTarget::Scanner, UNIFORM_SPACING_PARAMETER_PATH, enable ? "true" : "false");
 }
 
 void Gocator::grab(size_t frames)
