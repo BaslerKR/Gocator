@@ -27,6 +27,8 @@ struct FakeGocator {
     std::uint64_t generation = 0;
     int opens = 0;
     int closes = 0;
+    std::string refusedAddress;
+    std::string refusalReason;
     std::function<void()> beforeDiscover;
     bool failDiscover = false;
 };
@@ -69,6 +71,7 @@ class GocatorConnectionControlTests : public QObject {
     Q_OBJECT
 private slots:
     void lifecycleAdmissionAndStaleGeneration();
+    void connectAcceptsUndiscoveredAddress();
     void discoverPublishesCacheAndFailureStaysSilent();
     void startWithoutConnectionReportsInactive();
     void snapshotDoesNotWaitForControlLock();
@@ -99,14 +102,16 @@ void GocatorConnectionControlTests::bind(GocatorSourceController& controller, Fa
         if (error) error->clear();
         return fake.devices;
     };
-    controller._lifecycle.open = [&fake](const std::string& targetId) {
+    controller._lifecycle.open = [&fake](const std::string& targetId, std::string* error) {
         ++fake.opens;
-        for (const auto& device : fake.devices) {
-            if (device.address != targetId) continue;
-            fake.snapshot = {true, ++fake.generation, targetId};
-            return true;
+        if (!fake.refusedAddress.empty() && targetId == fake.refusedAddress) {
+            if (error) *error = fake.refusalReason.empty()
+                ? "GoPxL refused the address" : fake.refusalReason;
+            return false;
         }
-        return false;
+        // Discovery is advisory: an address that was not discovered is still opened.
+        fake.snapshot = {true, ++fake.generation, targetId};
+        return true;
     };
     controller._lifecycle.close = [&fake] {
         ++fake.closes;
@@ -192,11 +197,22 @@ void GocatorConnectionControlTests::lifecycleAdmissionAndStaleGeneration()
         && *disconnected.state->deliveredFrames == std::uint64_t{7});
 
     int completions = 0;
-    QCOMPARE(controller.requestConnect("192.168.1.99", [&](auto) { ++completions; }).error,
-        DeviceConnectionError::NotFound);
     QCOMPARE(controller.requestConnect("", [&](auto) { ++completions; }).error,
         DeviceConnectionError::InvalidArgument);
     QCOMPARE(completions, 0);
+
+    // An undiscovered address is admitted; GoPxL decides whether it can be opened.
+    fake.refusedAddress = "192.168.1.99";
+    fake.refusalReason = "GoPxL refused 192.168.1.99: connection timed out";
+    const auto refusedAddress = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("192.168.1.99", done);
+    });
+    QCOMPARE(refusedAddress.error, DeviceConnectionError::BackendFailure);
+    QCOMPARE(refusedAddress.effect, DeviceConnectionEffect::None);
+    QVERIFY(QString::fromStdString(refusedAddress.message).contains(
+        QStringLiteral("connection timed out")));
+    QVERIFY(refusedAddress.state && !refusedAddress.state->connected);
+    QCOMPARE(fake.opens, 1);
 
     const auto connected = awaitState(controller, [&](auto done) {
         return controller.requestConnect("192.168.1.10", done);
@@ -209,7 +225,7 @@ void GocatorConnectionControlTests::lifecycleAdmissionAndStaleGeneration()
     QCOMPARE(connected.state->displayName, std::string("G2500 (12345) - 192.168.1.10"));
     QVERIFY(!connected.state->connectionId.empty());
     const std::string firstConnection = connected.state->connectionId;
-    QCOMPARE(fake.opens, 1);
+    QCOMPARE(fake.opens, 2);
 
     QCOMPARE(controller.requestConnect("192.168.1.11", [&](auto) { ++completions; }).error,
         DeviceConnectionError::Conflict);
@@ -252,6 +268,25 @@ void GocatorConnectionControlTests::lifecycleAdmissionAndStaleGeneration()
     QCOMPARE(awaitState(controller, [&](auto done) {
         return controller.requestDisconnect(second.state->connectionId, done);
     }).error, DeviceConnectionError::None);
+}
+
+void GocatorConnectionControlTests::connectAcceptsUndiscoveredAddress()
+{
+    FakeGocator fake;
+    fake.devices.clear();
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+
+    QVERIFY(controller.requestConnectionTargets([](auto) {}).error == DeviceConnectionError::None);
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("10.20.30.40", done);
+    });
+    QCOMPARE(connected.error, DeviceConnectionError::None);
+    QCOMPARE(connected.effect, DeviceConnectionEffect::Applied);
+    QVERIFY(connected.state && connected.state->connected);
+    QCOMPARE(connected.state->targetId, std::string("10.20.30.40"));
+    QCOMPARE(connected.state->displayName, std::string("10.20.30.40"));
+    QCOMPARE(fake.opens, 1);
 }
 
 void GocatorConnectionControlTests::discoverPublishesCacheAndFailureStaysSilent()

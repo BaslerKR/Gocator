@@ -3,6 +3,7 @@
 
 #ifdef GOCATOR_HAS_UI
 #include "GocatorControlUi.h"
+#include "GocatorAcquisitionSettings.h"
 #include <QElapsedTimer>
 #include <QJsonValue>
 #include <QMap>
@@ -125,6 +126,8 @@ private:
 
     /** Refreshes current scanner and sensor values asynchronously. */
     void updateFeatureValues();
+    /** @brief Writes the scan values the toolbar shows as explicit parameters before a grab. */
+    void applyAcquisitionSettings();
 
 protected:
     /** Applies asynchronously fetched values to existing feature editors. */

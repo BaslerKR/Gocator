@@ -116,6 +116,8 @@ public:
     void setCachedDevices(std::vector<DeviceInfo> devices);
 
     bool open(const std::string& ipAddress);
+    /** @brief Opens one address (discovered or not) and copies the SDK reason on refusal. */
+    bool open(const std::string& ipAddress, std::string* error);
     bool isOpened() const;
     /** @brief Copies the connection state and generation for lifecycle consumers. */
     ConnectionSnapshot connectionSnapshot() const;
@@ -126,13 +128,11 @@ public:
     void endControl();
     bool controlBusy() const noexcept;
 
-    void configure(double scanLengthMm, ScanMode mode, bool intensityEnabled, bool uniformSpacingEnabled, int exposureUs);
-
-    void setScanLengthMm(double length);
-    void setScanMode(ScanMode mode);
-    void setExposureUs(int exposure);
-    void setIntensityEnabled(bool enable);
-    void setUniformSpacingEnabled(bool enable);
+    [[nodiscard]] ParameterWriteResult setScanLengthMm(double length);
+    [[nodiscard]] ParameterWriteResult setScanMode(ScanMode mode);
+    [[nodiscard]] ParameterWriteResult setExposureUs(int exposure);
+    [[nodiscard]] ParameterWriteResult setIntensityEnabled(bool enable);
+    [[nodiscard]] ParameterWriteResult setUniformSpacingEnabled(bool enable);
 
     /**
      * Reads the JSON schema exposed by a scanner or sensor resource.

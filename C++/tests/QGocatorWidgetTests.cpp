@@ -13,6 +13,7 @@
 
 #include "GocatorDiscoveryDiagnostics.h"
 #include "GrabCallbackState.h"
+#include "GocatorAcquisitionSettings.h"
 #include "Utility/Qt/QGocatorWidget.h"
 
 class QGocatorWidgetTests : public QObject
@@ -35,6 +36,7 @@ private slots:
     void consecutiveSettersRetainRebuild();
     void refreshRetainsPendingRebuildPriority();
     void systemRecoversFromInitialObservationFailure();
+    void acquisitionSettingsBecomeExplicitWrites();
 };
 
 namespace
@@ -385,6 +387,51 @@ void QGocatorWidgetTests::systemRecoversFromInitialObservationFailure()
     QVERIFY(quick->isChecked());
     QVERIFY(!quick->isTristate());
     QVERIFY(quick->isEnabled());
+}
+
+void QGocatorWidgetTests::acquisitionSettingsBecomeExplicitWrites()
+{
+    gocator::AcquisitionSettings settings;
+    settings.scanLengthMm = 42.5;
+    settings.mode = Gocator::ScanMode::SurfaceMode;
+    settings.exposureUs = 2500;
+    settings.intensityEnabled = false;
+    settings.uniformSpacingEnabled = false;
+
+    struct Write { Gocator::ParameterTarget target; std::string path; std::string value; };
+    std::vector<Write> writes;
+    const auto refusal = gocator::applyAcquisitionSettings(settings,
+        [&writes](Gocator::ParameterTarget target, const std::string& path, const std::string& value) {
+            writes.push_back({target, path, value});
+            return Gocator::ParameterWriteResult{true, false, {}};
+        });
+    QVERIFY(refusal.empty());
+    QCOMPARE(writes.size(), std::size_t{6});
+    QCOMPARE(writes[0].path, std::string("/parameters/scanModeSettings/scanMode"));
+    QCOMPARE(writes[0].value, std::string("3"));
+    QCOMPARE(writes[1].path, std::string("/parameters/scanModeSettings/intensityEnabled"));
+    QCOMPARE(writes[1].value, std::string("false"));
+    QCOMPARE(writes[2].path, std::string("/parameters/scanModeSettings/uniformSpacingEnabled"));
+    QCOMPARE(writes[2].value, std::string("false"));
+    QCOMPARE(writes[3].path, std::string("/parameters/scanModeSettings/scanLengthMm"));
+    QCOMPARE(writes[3].value, std::string("42.5"));
+    QCOMPARE(writes[4].target, Gocator::ParameterTarget::Sensor);
+    QCOMPARE(writes[4].path, std::string("/parameters/exposureSettings/exposureMode"));
+    QCOMPARE(writes[4].value, std::string("0"));
+    QCOMPARE(writes[5].path, std::string("/parameters/exposureSettings/singleExposure"));
+    QCOMPARE(writes[5].value, std::string("2500"));
+
+    // A refusal keeps the SDK reason and still applies the remaining explicit writes.
+    writes.clear();
+    const auto refused = gocator::applyAcquisitionSettings(settings,
+        [&writes](Gocator::ParameterTarget target, const std::string& path, const std::string& value) {
+            writes.push_back({target, path, value});
+            if (path.size() >= 8 && path.compare(path.size() - 8, 8, "scanMode") == 0)
+                return Gocator::ParameterWriteResult{false, false, "GoPxL refused"};
+            return Gocator::ParameterWriteResult{true, false, {}};
+        });
+    QCOMPARE(refused, std::string("GoPxL refused"));
+    QCOMPARE(writes.size(), std::size_t{6});
 }
 
 QTEST_MAIN(QGocatorWidgetTests)

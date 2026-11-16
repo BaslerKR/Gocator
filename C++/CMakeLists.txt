@@ -19,6 +19,12 @@ option(GOCATOR_BUILD_PLAYGROUND_PLUGIN
     "Build the Gocator Playground device plugin MODULE."
     OFF
 )
+option(GOCATOR_BUILD_PLAYGROUND_LOOPBACK_TESTS
+    "Build the Playground parameter loopback test for the Gocator controller."
+    OFF
+)
+set(GOCATOR_PLAYGROUND_SOURCE_DIR "" CACHE PATH
+    "Playground checkout used only by the opt-in loopback test.")
 
 if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
     set(GOCATOR_BUILD_PLAYGROUND_ADAPTER ON)
@@ -169,6 +175,8 @@ if(GOCATOR_BUILD_QT_UI)
     add_library(GocatorQtWidget STATIC
         Utility/Qt/QGocatorWidget.cpp
         Utility/Qt/QGocatorWidget.h
+        Utility/Qt/GocatorAcquisitionSettings.cpp
+        Utility/Qt/GocatorAcquisitionSettings.h
     )
     add_library(Gocator::QtWidget ALIAS GocatorQtWidget)
     set_target_properties(GocatorQtWidget PROPERTIES AUTOMOC ON)
@@ -306,13 +314,18 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
             "[Gocator] GOCATOR_BUILD_PLAYGROUND_PLUGIN=ON requires Qt 6."
         )
     endif()
-    find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Concurrent)
+    find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Concurrent Network)
 
     add_library(GocatorPlugin MODULE
         Utility/PlaygroundAdapter/Plugin/GocatorPlugin.cpp
         Utility/PlaygroundAdapter/Source/GocatorSourceController.h
         Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
         Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp
+        Utility/PlaygroundAdapter/Source/GocatorParameterObservation.cpp
+        Utility/PlaygroundAdapter/Source/GocatorParameterTree.h
+        Utility/PlaygroundAdapter/Source/GocatorParameterTree.cpp
+        Utility/PlaygroundAdapter/Source/GocatorParameterNotifications.h
+        Utility/PlaygroundAdapter/Source/GocatorParameterNotifications.cpp
     )
     set_target_properties(GocatorPlugin PROPERTIES
         PREFIX ""
@@ -359,7 +372,12 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
             tests/GocatorParameterControlTests.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.h
-            Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp)
+            Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp
+            Utility/PlaygroundAdapter/Source/GocatorParameterObservation.cpp
+            Utility/PlaygroundAdapter/Source/GocatorParameterTree.h
+            Utility/PlaygroundAdapter/Source/GocatorParameterTree.cpp
+            Utility/PlaygroundAdapter/Source/GocatorParameterNotifications.h
+            Utility/PlaygroundAdapter/Source/GocatorParameterNotifications.cpp)
         set_target_properties(GocatorParameterControlTests PROPERTIES AUTOMOC ON)
         target_link_libraries(GocatorParameterControlTests PRIVATE
             Playground::DevicePlugin Gocator::QtWidget Gocator::PlaygroundAdapter Qt6::Test Qt6::Concurrent)
@@ -377,7 +395,12 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
             tests/GocatorConnectionControlTests.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.h
-            Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp)
+            Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp
+            Utility/PlaygroundAdapter/Source/GocatorParameterObservation.cpp
+            Utility/PlaygroundAdapter/Source/GocatorParameterTree.h
+            Utility/PlaygroundAdapter/Source/GocatorParameterTree.cpp
+            Utility/PlaygroundAdapter/Source/GocatorParameterNotifications.h
+            Utility/PlaygroundAdapter/Source/GocatorParameterNotifications.cpp)
         set_target_properties(GocatorConnectionControlTests PROPERTIES AUTOMOC ON)
         target_link_libraries(GocatorConnectionControlTests PRIVATE
             Playground::DevicePlugin Gocator::QtWidget Gocator::PlaygroundAdapter Qt6::Test Qt6::Concurrent)
@@ -390,13 +413,53 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
             add_test(NAME GocatorConnectionControlTests COMMAND GocatorConnectionControlTests)
             set_tests_properties(GocatorConnectionControlTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         endif()
+
+        if(GOCATOR_BUILD_PLAYGROUND_LOOPBACK_TESTS)
+            if(NOT GOCATOR_PLAYGROUND_SOURCE_DIR OR NOT EXISTS
+               "${GOCATOR_PLAYGROUND_SOURCE_DIR}/src/DeviceRuntime/Protocol/DeviceParameterLoopback.cpp")
+                message(FATAL_ERROR
+                    "[Gocator] GOCATOR_BUILD_PLAYGROUND_LOOPBACK_TESTS=ON requires "
+                    "GOCATOR_PLAYGROUND_SOURCE_DIR to name a Playground checkout."
+                )
+            endif()
+            set(gocator_loopback_sources
+                tests/GocatorParameterLoopbackTests.cpp
+                Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
+                Utility/PlaygroundAdapter/Source/GocatorSourceController.h
+                Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp
+                Utility/PlaygroundAdapter/Source/GocatorParameterObservation.cpp
+                Utility/PlaygroundAdapter/Source/GocatorParameterTree.h
+                Utility/PlaygroundAdapter/Source/GocatorParameterTree.cpp
+                Utility/PlaygroundAdapter/Source/GocatorParameterNotifications.h
+                Utility/PlaygroundAdapter/Source/GocatorParameterNotifications.cpp
+                "${GOCATOR_PLAYGROUND_SOURCE_DIR}/src/DeviceRuntime/Protocol/DeviceParameterLoopback.cpp"
+                "${GOCATOR_PLAYGROUND_SOURCE_DIR}/src/DeviceRuntime/Protocol/DeviceParameterService.cpp"
+                "${GOCATOR_PLAYGROUND_SOURCE_DIR}/src/DeviceRuntime/Protocol/DeviceRuntimeProtocol.cpp")
+            add_executable(GocatorParameterLoopbackTests ${gocator_loopback_sources})
+            set_target_properties(GocatorParameterLoopbackTests PROPERTIES AUTOMOC ON)
+            target_include_directories(GocatorParameterLoopbackTests PRIVATE
+                "${GOCATOR_PLAYGROUND_SOURCE_DIR}/src/DevicePlugin"
+                "${GOCATOR_PLAYGROUND_SOURCE_DIR}/src")
+            target_link_libraries(GocatorParameterLoopbackTests PRIVATE
+                Playground::DevicePlugin Gocator::QtWidget Gocator::PlaygroundAdapter
+                Qt6::Test Qt6::Concurrent Qt6::Network)
+            if(WIN32)
+                add_test(NAME GocatorParameterLoopbackTests COMMAND ${CMAKE_COMMAND} -E env
+                    "QT_QPA_PLATFORM=offscreen"
+                    "PATH=${GOPXL_SDK_DIR}/lib/${gopxl_platform_dir};$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+                    $<TARGET_FILE:GocatorParameterLoopbackTests>)
+            else()
+                add_test(NAME GocatorParameterLoopbackTests COMMAND GocatorParameterLoopbackTests)
+                set_tests_properties(GocatorParameterLoopbackTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+            endif()
+        endif()
     endif()
 
     message(STATUS "[Gocator] GocatorPlugin enabled.")
 endif()
 
 # Keep contract assertions active in Release validation.
-foreach(module_test IN ITEMS QGocatorWidgetTests GocatorGraphicsFrameAdapterTests GocatorParameterControlTests GocatorConnectionControlTests)
+foreach(module_test IN ITEMS QGocatorWidgetTests GocatorGraphicsFrameAdapterTests GocatorParameterControlTests GocatorConnectionControlTests GocatorParameterLoopbackTests)
     if(TARGET ${module_test})
         target_compile_options(${module_test} PRIVATE
             $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>

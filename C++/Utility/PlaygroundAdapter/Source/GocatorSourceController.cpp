@@ -35,7 +35,11 @@ void completeConnection(const Callback& callback, Value value)
 } // namespace
 
 GocatorSourceController::GocatorSourceController(Gocator* gocator, QObject* parent)
-    : AbstractSourceController(parent), _gocator(gocator) {
+    : AbstractSourceController(parent),
+      _notifications([this](const std::string& connectionId, const std::string& subscriptionId) {
+          return snapshotChange(connectionId, subscriptionId);
+      }),
+      _gocator(gocator) {
     _parameterIdentity = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     _readSystem = [gocator] { return gocator->systemState(); };
     _writeQuickEdit = [gocator](bool enabled, std::optional<Gocator::SystemState> expected) {
@@ -43,11 +47,23 @@ GocatorSourceController::GocatorSourceController(Gocator* gocator, QObject* pare
     };
     _systemConnected = [gocator] { return gocator && gocator->isOpened(); };
     if (gocator) {
+        _readResource = [gocator](Gocator::ParameterTarget target) {
+            return ResourceSnapshot{gocator->getParametersSchema(target),
+                gocator->getParametersData(target)};
+        };
+        _writeParameter = [gocator](Gocator::ParameterTarget target, const std::string& path,
+            const std::string& value) {
+            return gocator->setParameterValue(target, path, value);
+        };
+    }
+    if (gocator) {
         _lifecycleAvailable = true;
         _lifecycle.snapshot = [gocator] { return gocator->connectionSnapshot(); };
         _lifecycle.cachedDevices = [gocator] { return gocator->cachedDevices(); };
         _lifecycle.discover = [gocator](std::string* error) { return gocator->discoverDevices(error); };
-        _lifecycle.open = [gocator](const std::string& targetId) { return gocator->open(targetId); };
+        _lifecycle.open = [gocator](const std::string& targetId, std::string* error) {
+            return gocator->open(targetId, error);
+        };
         _lifecycle.close = [gocator] { gocator->close(); };
         _lifecycle.beginControl = [gocator] { return gocator->tryBeginControl(); };
         _lifecycle.endControl = [gocator] { gocator->endControl(); };
@@ -57,6 +73,8 @@ GocatorSourceController::GocatorSourceController(Gocator* gocator, QObject* pare
 }
 
 GocatorSourceController::~GocatorSourceController() {
+    stopObservationThread();
+    _notifications.close();
     _parameterWork.waitForFinished();
     _controlWork.waitForFinished();
     stop();
@@ -102,6 +120,20 @@ void GocatorSourceController::registerCallbacks() {
         if (status == Gocator::GrabbingStatus) {
             _isGrabbing = on;
             emit diagnosticAcquisitionChanged(on, QStringLiteral("gocator"));
+            // Writability is re-observed after acquisition changes; never cached from a locked
+            // state and never deferred to a GUI timer.
+            wakeObservationThread();
+        } else if (status == Gocator::ConnectionStatus && !on) {
+            std::string connection;
+            {
+                std::lock_guard<std::mutex> lock(_observationMutex);
+                connection = _lastConnectionId.empty() ? _notificationConnectionId : _lastConnectionId;
+            }
+            if (!connection.empty()) {
+                _notifications.publishTerminal(connection, DeviceParameterError::Disconnected,
+                    "The Gocator connection closed.");
+                _notifications.drain();
+            }
         }
     });
 
@@ -251,9 +283,7 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
         if (snapshot.opened)
             return refused(DeviceConnectionError::Conflict, "Disconnect before connecting another device.");
         if (argument.empty() || argument.find('\0') != std::string::npos)
-            return refused(DeviceConnectionError::InvalidArgument, "An exact targetId is required.");
-        if (!cachedTarget(argument))
-            return refused(DeviceConnectionError::NotFound, "Exact declared target was not found.");
+            return refused(DeviceConnectionError::InvalidArgument, "An exact address is required.");
         if (diagnostics.grabbing)
             return refused(DeviceConnectionError::Busy, "Stop live acquisition before connecting.");
     } else {
@@ -289,11 +319,13 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
                         result = {{}, {}, DeviceConnectionEffect::None, copiedState()};
                     }
                 } else if (operation == Lifecycle::Connect) {
-                    if (_lifecycle.open && _lifecycle.open(argument))
+                    std::string error;
+                    if (_lifecycle.open && _lifecycle.open(argument, &error))
                         result = {{}, {}, DeviceConnectionEffect::Applied, copiedState()};
                     else
                         result = {DeviceConnectionError::BackendFailure,
-                            "The Gocator connection could not be opened.", DeviceConnectionEffect::None, copiedState()};
+                            error.empty() ? "The Gocator connection could not be opened." : error,
+                            DeviceConnectionEffect::None, copiedState()};
                 } else {
                     if (_lifecycle.close) _lifecycle.close();
                     const bool opened = _lifecycle.snapshot && _lifecycle.snapshot().opened;

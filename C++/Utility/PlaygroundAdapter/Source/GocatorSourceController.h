@@ -4,11 +4,17 @@
 #include "DeviceConnectionControl.h"
 #include "DeviceParameterControl.h"
 #include "FrameStorage.h"
+#include "GocatorParameterNotifications.h"
+#include "GocatorParameterTree.h"
 #include <QFuture>
 #include <atomic>
+#include <condition_variable>
 #include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 class GocatorGraphicsFrameStream;
@@ -19,6 +25,7 @@ class GocatorSourceController : public AbstractSourceController, public IDeviceP
     Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl IFrameStorageClient)
 public:
     using ParameterCompletion = IDeviceParameterControl::Completion;
+    using ChangeListener = IDeviceParameterControl::ChangeListener;
     using ConnectionCompletion = IDeviceConnectionControl::Completion;
     using TargetsCompletion = IDeviceConnectionControl::TargetsCompletion;
 
@@ -33,18 +40,24 @@ public:
     void setFrameConsumer(FrameConsumer consumer) override;
     bool supports3D() const override { return true; }
 
-    /** @brief Observes official GoSystem controls independently of widget visibility. */
+    /** @brief Observes the System, Scanner and Sensor resource trees independently of widget visibility. */
     DeviceParameterResult requestParameters(InventoryCompletion completion) override;
-    /** @brief Reads an exact System parameter in the current connection generation. */
+    /** @brief Reads one exact connection-scoped parameter in the current connection generation. */
     DeviceParameterResult requestReadParameter(DeviceParameterTarget target, ParameterCompletion completion) override;
-    /** @brief Applies Quick Edit through the SDK with validation and actual readback. */
+    /** @brief Writes one parameter through the SDK with fresh validation and actual readback. */
     DeviceParameterResult requestWriteParameter(DeviceParameterTarget target, DeviceParameterValue value,
         std::optional<std::uint64_t> expectedRevision, ParameterCompletion completion) override;
     /** @brief Rejects commands: GoSystem exposes no software-trigger command. */
     DeviceParameterResult requestExecuteParameter(DeviceParameterTarget target,
         std::optional<std::uint64_t> expectedRevision, ParameterCompletion completion) override;
+    /** @brief Starts one module-owned observation subscription and its initial snapshot. */
+    DeviceParameterResult requestParameterChanges(std::string connectionId,
+        std::string subscriptionId, ChangeListener delivery) override;
+    /** @brief Stops delivery for one subscription and completes after the module drained it. */
+    DeviceParameterResult releaseParameterChanges(std::string connectionId,
+        std::string subscriptionId, ParameterCompletion completion) override;
 
-    /** @brief Declares discovery, connect and disconnect while the session exists. */
+    /** @brief Declares discovery, address connect and disconnect while the session exists. */
     DeviceConnectionCapabilities connectionCapabilities() const override;
     /** @brief Copies the cached discovery catalog without refreshing it. */
     DeviceConnectionResult requestConnectionTargets(TargetsCompletion completion) override;
@@ -52,7 +65,7 @@ public:
     DeviceConnectionResult requestConnectionState(IDeviceConnectionControl::Completion completion) override;
     /** @brief Refreshes discovery while disconnected and idle. */
     DeviceConnectionResult requestDiscover(TargetsCompletion completion) override;
-    /** @brief Opens one exact cached target while disconnected. */
+    /** @brief Opens one exact cached target or an undiscovered address while disconnected. */
     DeviceConnectionResult requestConnect(std::string targetId, IDeviceConnectionControl::Completion completion) override;
     /** @brief Closes the exact current connection while acquisition is stopped. */
     DeviceConnectionResult requestDisconnect(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
@@ -67,20 +80,89 @@ signals:
 private:
     friend class GocatorParameterControlTests;
     friend class GocatorConnectionControlTests;
+    friend class GocatorParameterLoopbackTests;
+    friend class GocatorParameterNotificationTests;
+    friend struct GocatorParameterTestAccess;
+
+    /** @brief One resource schema/data pair copied from the SDK. */
+public:
+    struct ResourceSnapshot {
+        std::string schema;
+        std::string data;
+    };
+private:
+
+    /** @brief Last observed state of one flattened resource leaf. */
+    struct ObservedParameter {
+        std::uint64_t revision = 0;
+        QJsonValue rawValue;
+        bool writable = false;
+        bool present = false;
+    };
+
+    /** @brief Result of one full observation. */
+    struct Observation {
+        std::vector<DeviceParameterDescriptor> parameters;
+        std::vector<gocator::ResourceParameter> resourceParameters;
+        std::optional<Gocator::SystemState> systemState;
+        std::string connectionId;
+    };
+
     // Copied control callbacks keep SDK I/O separate from contract validation.
     std::function<Gocator::SystemState()> _readSystem;
     std::function<void(bool, std::optional<Gocator::SystemState>)> _writeQuickEdit;
     std::function<bool()> _systemConnected;
+    std::function<ResourceSnapshot(Gocator::ParameterTarget)> _readResource;
+    std::function<Gocator::ParameterWriteResult(Gocator::ParameterTarget, const std::string&,
+        const std::string&)> _writeParameter;
     /** @brief Owns one accepted worker and drains it before controller destruction. */
     DeviceParameterResult scheduleParameterWork(std::function<void()> work);
     DeviceParameterResult parameterWork(DeviceParameterTarget target,
         std::optional<DeviceParameterValue> value, std::optional<std::uint64_t> revision, ParameterCompletion completion);
-    std::vector<DeviceParameterDescriptor> observeSystem(const Gocator::SystemState& state);
+    std::vector<DeviceParameterDescriptor> observeSystem(const Gocator::SystemState& state,
+        const std::string& connectionId);
+    /** @brief Observes every resource scope and publishes differences under one cycle lock.
+     *  @param snapshot When true, queues a complete snapshot instead of only the differences.
+     */
+    Observation observeAll(bool snapshot = false);
+    /** @brief Updates one resource scope's revision cache and appends its descriptors. */
+    void observeResource(Observation* observation, Gocator::ParameterTarget target,
+        const std::string& scope, const std::string& connectionId);
+    /** @brief Builds one complete snapshot from the last observation, never calling the SDK. */
+    DeviceParameterChange snapshotChange(const std::string& connectionId,
+        const std::string& subscriptionId) const;
+    /** @brief Publishes differences from the last published catalog while the cycle lock is held. */
+    void publishDifferencesLocked(const Observation& observation);
+    /** @brief Starts the module-owned observation thread; the caller must not hold a lock. */
+    void startObservationThread();
+    /** @brief Requests an immediate observation pass (for example after acquisition stops). */
+    void wakeObservationThread();
+    /** @brief Stops and joins the observation thread. */
+    void stopObservationThread();
+    /** @brief Runs observation, notification and drain until no subscription remains. */
+    void observationLoop();
     QFuture<void> _parameterWork;
     std::atomic<bool> _parameterBusy{false};
     std::string _parameterIdentity;
     std::optional<Gocator::SystemState> _lastSystemState;
     std::uint64_t _parameterRevision = 0;
+    mutable std::mutex _observationMutex;
+    /** @brief Serializes one complete read cycle so observations and publications stay ordered. */
+    std::mutex _observationCycleMutex;
+    std::map<std::string, DeviceParameterDescriptor> _publishedParameters;
+    std::map<std::string, ObservedParameter> _observedParameters;
+    std::vector<DeviceParameterDescriptor> _lastCatalog;
+    std::string _lastConnectionId;
+    /** @brief Connection that owns the current subscriptions; used to terminate them on failure. */
+    std::string _notificationConnectionId;
+    gocator::ParameterNotificationHub _notifications;
+    std::thread _observationThread;
+    mutable std::mutex _observationThreadMutex;
+    std::condition_variable _observationWake;
+    bool _observationStop = false;
+    bool _observationRunning = false;
+    bool _observationSnapshotPending = false;
+    std::chrono::milliseconds _observationInterval{1000};
     void registerCallbacks();
     void deregisterCallbacks();
 
@@ -89,7 +171,7 @@ private:
         std::function<Gocator::ConnectionSnapshot()> snapshot;
         std::function<std::vector<Gocator::DeviceInfo>()> cachedDevices;
         std::function<std::vector<Gocator::DeviceInfo>(std::string*)> discover;
-        std::function<bool(const std::string&)> open;
+        std::function<bool(const std::string&, std::string*)> open;
         std::function<void()> close;
         std::function<bool()> beginControl;
         std::function<void()> endControl;
