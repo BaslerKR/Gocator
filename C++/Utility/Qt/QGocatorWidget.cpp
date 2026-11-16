@@ -1133,8 +1133,13 @@ void QGocatorWidget::onParameterChanged()
                 const auto result = gocator->setParameterValue(target, path, valStr);
                 if (!result.applied) {
                     // The sensor decides whether a running write is allowed; keep its reason.
+                    // A dispatched exception is not a refusal: the value may have applied, and the
+                    // watcher's follow-up resource read is the source of truth.
                     qCWarning(gocatorDiagnosticLog).noquote()
-                        << "Parameter write refused:" << QString::fromStdString(result.error);
+                        << (result.mayHaveApplied
+                                ? "Parameter write result unknown; re-reading the sensor:"
+                                : "Parameter write refused:")
+                        << QString::fromStdString(result.error);
                     return;
                 }
                 // This record confirms dispatch, not readback acceptance.
