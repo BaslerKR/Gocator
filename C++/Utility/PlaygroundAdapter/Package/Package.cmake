@@ -4,7 +4,7 @@
 # Repeat NAME=value to declare multiple environment paths for one variable.
 set(PLAYGROUND_PLUGIN_ID "gocator")
 set(PLAYGROUND_PLUGIN_VERSION "0.3.0")
-# IDevicePlugin/7.0 (standard connection lifecycle, hardware resource claims) first ships in Core 0.6.6.
+# IDevicePlugin/8.0 (standard connection lifecycle, hardware resource claims) first ships in Core 0.6.6.
 set(PLAYGROUND_PLUGIN_MINIMUM_CORE_VERSION "0.6.6")
 set(PLAYGROUND_PLUGIN_DISPLAY_NAME "Gocator")
 # Optional presentation metadata; consumers must export it to manifests/catalogs.
@@ -13,8 +13,10 @@ set(PLAYGROUND_PLUGIN_DESCRIPTION "Discover and configure Gocator sensors, and a
 set(PLAYGROUND_PLUGIN_ADD_ACTION_TEXT "Gocator")
 set(PLAYGROUND_PLUGIN_SESSION_TYPE "Gocator")
 set(PLAYGROUND_PLUGIN_MENU_ORDER 300)
-set(PLAYGROUND_PLUGIN_LIBRARY_WINDOWS "GocatorPlugin.dll")
-set(PLAYGROUND_PLUGIN_LIBRARY_LINUX "GocatorPlugin.so")
-set(PLAYGROUND_PLUGIN_LIBRARY_MACOS "GocatorPlugin.so")
+set(PLAYGROUND_PLUGIN_INSTANCING "package")
+set(PLAYGROUND_PLUGIN_SESSION_SERVICES "graphicsEngine" "scriptEditor" "threeD")
+set(PLAYGROUND_PLUGIN_MODULE_WINDOWS "GocatorPlugin.dll")
+set(PLAYGROUND_PLUGIN_MODULE_LINUX "GocatorPlugin.so")
+set(PLAYGROUND_PLUGIN_MODULE_MACOS "GocatorPlugin.so")
 set(PLAYGROUND_PLUGIN_LIBRARY_DIRECTORIES
     "runtime")
