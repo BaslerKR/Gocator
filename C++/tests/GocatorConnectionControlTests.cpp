@@ -79,6 +79,7 @@ private slots:
     void singleAndLiveShareOneAuthority();
     void pendingLiveStartBlocksSourceStart();
     void singleStopRacingStartStaysExplicit();
+    void singleGrabThrowReleasesStartReservation();
     void registeredCallbacksCompleteSingle();
     void connectAcceptsUndiscoveredAddress();
     void discoverPublishesCacheAndFailureStaysSilent();
@@ -478,6 +479,43 @@ void GocatorConnectionControlTests::pendingLiveStartBlocksSourceStart()
 
     release->set_value();
     const auto live = future.get();
+    QCOMPARE(live.error, DeviceConnectionError::None);
+    QCOMPARE(fake.liveGrabs, std::size_t{1});
+    controller.stop();
+}
+
+void GocatorConnectionControlTests::singleGrabThrowReleasesStartReservation()
+{
+    FakeGocator fake;
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("192.168.1.10", done);
+    });
+    QVERIFY(connected.state);
+
+    controller._lifecycle.grab = [](std::size_t) -> bool {
+        throw std::runtime_error("grab boom");
+    };
+    auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto future = promise->get_future();
+    QCOMPARE(controller.requestSingle(connected.state->connectionId,
+        [promise](DeviceConnectionResult result) { promise->set_value(std::move(result)); }).error,
+        DeviceConnectionError::None);
+    const auto failed = future.get();
+    QCOMPARE(failed.error, DeviceConnectionError::BackendFailure);
+    QVERIFY(failed.message.find("grab boom") != std::string::npos);
+
+    // A thrown producer start must not leave the acquisition reservation held for the session.
+    controller._lifecycle.grab = [&fake](std::size_t frames) {
+        if (frames == 1) ++fake.singleGrabs;
+        else ++fake.liveGrabs;
+        fake.diagnostics.grabbing = true;
+        return true;
+    };
+    const auto live = awaitState(controller, [&](auto done) {
+        return controller.requestLiveStart(connected.state->connectionId, done);
+    });
     QCOMPARE(live.error, DeviceConnectionError::None);
     QCOMPARE(fake.liveGrabs, std::size_t{1});
     controller.stop();
