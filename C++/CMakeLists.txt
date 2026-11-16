@@ -309,12 +309,12 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
     find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Concurrent)
 
     add_library(GocatorPlugin MODULE
-        "${PlaygroundPluginSDK_PREFIX}/include/Playground/DeviceRuntime/Contract/AbstractSourceController.h"
         Utility/PlaygroundAdapter/Plugin/GocatorPlugin.cpp
         Utility/PlaygroundAdapter/Source/GocatorSourceController.h
         Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
         Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp
     )
+    playground_sdk_add_runtime_contract(GocatorPlugin)
     set_target_properties(GocatorPlugin PROPERTIES
         PREFIX ""
         OUTPUT_NAME GocatorPlugin
@@ -358,11 +358,11 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
     endif()
     if(GOCATOR_BUILD_TESTS)
         add_executable(GocatorParameterControlTests
-            "${PlaygroundPluginSDK_PREFIX}/include/Playground/DeviceRuntime/Contract/AbstractSourceController.h"
             tests/GocatorParameterControlTests.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.h
             Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp)
+        playground_sdk_add_runtime_contract(GocatorParameterControlTests)
         set_target_properties(GocatorParameterControlTests PROPERTIES AUTOMOC ON)
         target_link_libraries(GocatorParameterControlTests PRIVATE
             Playground::DeviceRuntimeContract Gocator::QtWidget Gocator::PlaygroundAdapter Qt6::Test Qt6::Concurrent)
@@ -377,11 +377,11 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
         endif()
 
         add_executable(GocatorConnectionControlTests
-            "${PlaygroundPluginSDK_PREFIX}/include/Playground/DeviceRuntime/Contract/AbstractSourceController.h"
             tests/GocatorConnectionControlTests.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.cpp
             Utility/PlaygroundAdapter/Source/GocatorSourceController.h
             Utility/PlaygroundAdapter/Source/GocatorParameterControl.cpp)
+        playground_sdk_add_runtime_contract(GocatorConnectionControlTests)
         set_target_properties(GocatorConnectionControlTests PROPERTIES AUTOMOC ON)
         target_link_libraries(GocatorConnectionControlTests PRIVATE
             Playground::DeviceRuntimeContract Gocator::QtWidget Gocator::PlaygroundAdapter Qt6::Test Qt6::Concurrent)
