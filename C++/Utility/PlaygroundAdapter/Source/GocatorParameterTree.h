@@ -1,6 +1,6 @@
 #pragma once
 
-#include "DeviceParameter.h"
+#include "DeviceRuntime/Contract/DeviceParameter.h"
 
 #include <QJsonObject>
 #include <QJsonValue>

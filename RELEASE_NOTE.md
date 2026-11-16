@@ -1,5 +1,6 @@
 ## Unreleased
 
+- Build against the widget-free device runtime SDK: the contract target is `Playground::DeviceRuntimeContract`, headers live under `DeviceRuntime/Contract`, and the interface is `IDeviceRuntime`. The temporary widget library resolves Qt Widgets and Resources itself until U2 removes it.
 - Expose the System, Scanner and Sensor parameter scopes as one typed tree: GoPxL schema labels, nested category paths, enum labels, numeric bounds, units, read-only access and per-parameter revisions. Scanner and sensor leaves write through JSON-pointer paths with an actual readback.
 - Add module-owned parameter change subscriptions over the same tree. A bounded queue turns overflow into one explicit resync snapshot; observation runs on a module thread only while a subscription is active, so no GUI timer polls the sensor. Writability is re-observed after acquisition changes and after every write instead of being cached from a locked state.
 - Delete `Gocator::configure`. The scan settings it applied are explicit parameter writes before `source.start`, including the former `exposureMode` value; output selection that acquisition needs moves into `grab()`.
@@ -69,8 +70,8 @@
 
 - Stage GoPxL dylibs in the Playground plugin `runtime` payload on macOS instead of the host `Contents/Frameworks` extra list.
 
-- Link `Playground::DevicePlugin` for the `IDevicePlugin` MODULE.
-- Own package identity in `Utility/PlaygroundAdapter/Package/Package.cmake`; the host emits `plugin.json` from `DevicePluginPackage.h`.
+- Link `Playground::DeviceRuntimeContract` for the `IDeviceRuntime` MODULE.
+- Own package identity in `Utility/PlaygroundAdapter/Package/Package.cmake`; the host emits `plugin.json` from `DeviceRuntime.h`.
 - Keep the session source controller in `Utility/PlaygroundAdapter/Source` as `GocatorSourceController`.
 - Declare the Playground plugin runtime payload from this module; the host copies it into the package.
 - Move the GraphicsFrame stream/adapter into `Utility/PlaygroundAdapter` as `Gocator::PlaygroundAdapter`.

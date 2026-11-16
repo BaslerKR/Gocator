@@ -1,9 +1,9 @@
 #pragma once
-#include "AbstractSourceController.h"
+#include "DeviceRuntime/Contract/AbstractSourceController.h"
 #include "Gocator.h"
-#include "DeviceConnectionControl.h"
-#include "DeviceParameterControl.h"
-#include "FrameStorage.h"
+#include "DeviceRuntime/Contract/DeviceConnectionControl.h"
+#include "DeviceRuntime/Contract/DeviceParameterControl.h"
+#include "DeviceRuntime/Contract/FrameStorage.h"
 #include "GocatorParameterNotifications.h"
 #include "GocatorParameterTree.h"
 #include <QFuture>
