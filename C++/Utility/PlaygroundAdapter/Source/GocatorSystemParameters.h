@@ -15,6 +15,7 @@ inline std::vector<DeviceParameterDescriptor> systemParameters(
     running.revision = revision;
     running.displayName = "Running state";
     running.kind = DeviceParameterKind::Enumeration;
+    running.representation = DeviceParameterRepresentation::Choice;
     running.available = running.readable = true;
     running.enumEntries = {"ready", "running", "conflict"};
     running.value = std::string(state.running == Gocator::SystemState::Running::Ready ? "ready"
@@ -26,6 +27,7 @@ inline std::vector<DeviceParameterDescriptor> systemParameters(
     quick.displayName = "Quick edit";
     quick.description = "Suppresses recalculation of existing scan data while editing configuration.";
     quick.kind = DeviceParameterKind::Boolean;
+    quick.representation = DeviceParameterRepresentation::Toggle;
     quick.available = quick.readable = quick.writable = true;
     quick.value = state.quickEditEnabled;
     return {std::move(running), std::move(quick)};

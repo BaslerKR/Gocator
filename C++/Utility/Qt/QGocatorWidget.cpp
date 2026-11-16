@@ -365,7 +365,7 @@ void QGocatorWidget::onGrabOneClicked()
 {
     if (!_gocator || _shuttingDown || _externalControlActive) return;
     logMessage(tr("Starting single grab..."), false);
-    _gocator->configure(scanLengthMm(), scanMode(), intensityEnabled(), uniformSpacingEnabled(), exposureUs());
+    applyAcquisitionSettings();
     _gocator->grab(1);
 }
 
@@ -376,7 +376,7 @@ void QGocatorWidget::onGrabLiveToggled(bool toggled)
     if (toggled)
     {
         logMessage(tr("Starting live grab..."), false);
-        _gocator->configure(scanLengthMm(), scanMode(), intensityEnabled(), uniformSpacingEnabled(), exposureUs());
+        applyAcquisitionSettings();
         _gocator->grab();
     }
     else
@@ -765,7 +765,8 @@ void QGocatorWidget::setScanLengthMm(double length)
     _pendingParams[path] = length;
     if (_gocator && _gocator->isOpened())
     {
-        _gocator->setScanLengthMm(length);
+        const auto result = _gocator->setScanLengthMm(length);
+        if (!result.applied) logMessage(tr("Scan length was not applied: %1").arg(QString::fromStdString(result.error)), true);
     }
     populateFeatures();
 }
@@ -777,7 +778,8 @@ void QGocatorWidget::setScanMode(Gocator::ScanMode mode)
     _pendingParams[path] = val;
     if (_gocator && _gocator->isOpened())
     {
-        _gocator->setScanMode(mode);
+        const auto result = _gocator->setScanMode(mode);
+        if (!result.applied) logMessage(tr("Scan mode was not applied: %1").arg(QString::fromStdString(result.error)), true);
     }
     populateFeatures();
 }
@@ -788,7 +790,8 @@ void QGocatorWidget::setExposureUs(int exposure)
     _pendingParams[path] = exposure;
     if (_gocator && _gocator->isOpened())
     {
-        _gocator->setExposureUs(exposure);
+        const auto result = _gocator->setExposureUs(exposure);
+        if (!result.applied) logMessage(tr("Exposure was not applied: %1").arg(QString::fromStdString(result.error)), true);
     }
     populateFeatures();
 }
@@ -799,7 +802,8 @@ void QGocatorWidget::setIntensityEnabled(bool enable)
     _pendingParams[path] = enable;
     if (_gocator && _gocator->isOpened())
     {
-        _gocator->setIntensityEnabled(enable);
+        const auto result = _gocator->setIntensityEnabled(enable);
+        if (!result.applied) logMessage(tr("Intensity was not applied: %1").arg(QString::fromStdString(result.error)), true);
     }
     populateFeatures();
 }
@@ -810,7 +814,8 @@ void QGocatorWidget::setUniformSpacingEnabled(bool enable)
     _pendingParams[path] = enable;
     if (_gocator && _gocator->isOpened())
     {
-        _gocator->setUniformSpacingEnabled(enable);
+        const auto result = _gocator->setUniformSpacingEnabled(enable);
+        if (!result.applied) logMessage(tr("Uniform spacing was not applied: %1").arg(QString::fromStdString(result.error)), true);
     }
     populateFeatures();
 }
@@ -1164,6 +1169,20 @@ void QGocatorWidget::onParameterChanged()
 void QGocatorWidget::updateFeatureValues()
 {
     fetchFeatureData(false);
+}
+
+void QGocatorWidget::applyAcquisitionSettings()
+{
+    if (!_gocator) return;
+    const gocator::AcquisitionSettings settings{scanLengthMm(), scanMode(), exposureUs(),
+        intensityEnabled(), uniformSpacingEnabled()};
+    const auto refusal = gocator::applyAcquisitionSettings(settings,
+        [this](Gocator::ParameterTarget target, const std::string& path, const std::string& value) {
+            return _gocator->setParameterValue(target, path, value);
+        });
+    if (!refusal.empty()) {
+        logMessage(tr("Scan setting was not applied: %1").arg(QString::fromStdString(refusal)), true);
+    }
 }
 
 bool QGocatorWidget::featureDataAvailable() const
