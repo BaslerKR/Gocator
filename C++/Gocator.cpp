@@ -395,13 +395,15 @@ struct Gocator::Impl
         }
     }
 
-    void setParameterValue(ParameterTarget target, const std::string& path, const std::string& jsonValue)
+    Gocator::ParameterWriteResult setParameterValue(ParameterTarget target, const std::string& path,
+        const std::string& jsonValue)
     {
         if (!isOpened.load())
         {
-            Gocator::syslog("Set parameter skipped: Gocator is not connected. target="
+            const std::string reason = "Gocator is not connected.";
+            Gocator::syslog("Set parameter skipped: " + reason + " target="
                 + std::string(parameterTargetName(target)) + " path=" + path + ".", true);
-            return;
+            return {false, false, reason};
         }
         try
         {
@@ -412,13 +414,16 @@ struct Gocator::Impl
             resources->setJson(getParameterTargetPath(target), patch);
             Gocator::syslog("Gocator parameter applied: target=" + std::string(parameterTargetName(target))
                 + " path=" + path + ".");
+            return {true, false, {}};
         }
         catch (const std::exception& e)
         {
-            Gocator::syslog("setParameterValue failed: " + std::string(e.what())
+            const std::string reason = e.what();
+            Gocator::syslog("setParameterValue failed: " + reason
                 + " (target: " + parameterTargetName(target)
                 + ", path: " + path
                 + ", val: " + jsonValue + ")", true);
+            return {false, true, reason};
         }
     }
 
@@ -949,16 +954,23 @@ std::string Gocator::getParametersData(ParameterTarget target) const
     return "{}";
 }
 
-void Gocator::setParameterValue(ParameterTarget target, const std::string& path, const std::string& jsonValue)
+Gocator::ParameterWriteResult Gocator::setParameterValue(ParameterTarget target, const std::string& path,
+    const std::string& jsonValue)
 {
     if (target == ParameterTarget::System) {
         if (path != "/parameters/quickEditEnabled" || (jsonValue != "true" && jsonValue != "false"))
             throw std::invalid_argument("Only the boolean System quickEditEnabled setting is writable.");
-        setQuickEditEnabled(jsonValue == "true");
-        return;
+        try {
+            setQuickEditEnabled(jsonValue == "true");
+            return {true, false, {}};
+        } catch (const SystemControlError& error) {
+            return {false, error.mayHaveApplied, error.what()};
+        } catch (const std::exception& error) {
+            return {false, false, error.what()};
+        }
     }
     std::lock_guard<std::recursive_mutex> lock(_impl->controlMutex);
-    _impl->setParameterValue(target, path, jsonValue);
+    return _impl->setParameterValue(target, path, jsonValue);
 }
 
 std::string Gocator::getParametersSchema(const std::string& type) const
@@ -971,9 +983,10 @@ std::string Gocator::getParametersData(const std::string& type) const
     return getParametersData(parameterTargetFromString(type));
 }
 
-void Gocator::setParameterValue(const std::string& type, const std::string& path, const std::string& jsonValue)
+Gocator::ParameterWriteResult Gocator::setParameterValue(const std::string& type, const std::string& path,
+    const std::string& jsonValue)
 {
-    setParameterValue(parameterTargetFromString(type), path, jsonValue);
+    return setParameterValue(parameterTargetFromString(type), path, jsonValue);
 }
 
 void Gocator::syslog(const std::string& message, bool warning)

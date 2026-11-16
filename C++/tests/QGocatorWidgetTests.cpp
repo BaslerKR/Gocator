@@ -28,6 +28,7 @@ private slots:
     void discoveryMessageClassifiesNoDevices();
     void stringFeaturesAndEscapedPaths();
     void inheritedReadOnlySurvivesRefresh();
+    void featureEditorsRemainEditableWhileGrabbing();
     void officialSystemSchemaAndDisconnectedGuards();
     void integerValuesRetainSigned64BitPrecision();
     void systemTreeMatchesOfficialControls();
@@ -211,6 +212,27 @@ void QGocatorWidgetTests::inheritedReadOnlySurvivesRefresh()
     QVERIFY(!check->isEnabled());
 }
 
+void QGocatorWidgetTests::featureEditorsRemainEditableWhileGrabbing()
+{
+    FeatureFixture widget;
+    widget.addFeatureNode(nullptr, Gocator::ParameterTarget::Scanner, QString(),
+        QStringLiteral("enabled"), QJsonObject{{"type", "boolean"}},
+        QJsonObject{{QStringLiteral("enabled"), true}});
+    auto* check = widget.findChild<QCheckBox*>(QStringLiteral("gocatorFeature_enabled"));
+    QVERIFY(check);
+    QVERIFY(check->isEnabled());
+
+    // GoPxL decides whether a running write is allowed; the widget must not blanket-disable it.
+    widget.setRunningState(true);
+    QVERIFY(check->isEnabled());
+
+    // The update/refresh gate still protects the tree while a request is in flight.
+    widget.setFeatureEditorsEnabled(false);
+    QVERIFY(!check->isEnabled());
+    widget.setFeatureEditorsEnabled(true);
+    QVERIFY(check->isEnabled());
+}
+
 void QGocatorWidgetTests::officialSystemSchemaAndDisconnectedGuards()
 {
     Gocator device;
@@ -224,6 +246,11 @@ void QGocatorWidgetTests::officialSystemSchemaAndDisconnectedGuards()
     QVERIFY_EXCEPTION_THROWN(device.setParameterValue(Gocator::ParameterTarget::System,
         "/parameters/runningState", "true"), std::invalid_argument);
     QVERIFY_EXCEPTION_THROWN(device.getParametersData("unknown"), std::invalid_argument);
+    const auto refused = device.setParameterValue(Gocator::ParameterTarget::Scanner,
+        "/parameters/scanModeSettings/scanLengthMm", "20.0");
+    QVERIFY(!refused.applied);
+    QVERIFY(!refused.mayHaveApplied);
+    QCOMPARE(QString::fromStdString(refused.error), QStringLiteral("Gocator is not connected."));
 }
 
 void QGocatorWidgetTests::integerValuesRetainSigned64BitPrecision()

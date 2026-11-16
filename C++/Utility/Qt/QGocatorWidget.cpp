@@ -650,7 +650,9 @@ void QGocatorWidget::setRunningState(bool running)
     _toolGrabOne->setEnabled(_gocator && _gocator->isOpened() && !running);
     _toolGrabLive->setEnabled(_gocator && _gocator->isOpened());
 
-    setFeatureEditorsEnabled(!running && !_parameterUpdateActive && !_featureRefreshActive);
+    // GoPxL owns the write-while-running rule: attempt the patch and report the SDK's refusal.
+    // Do not blanket-disable feature editors just because acquisition is active.
+    setFeatureEditorsEnabled(!_parameterUpdateActive && !_featureRefreshActive);
 }
 
 QString QGocatorWidget::ipAddress() const
@@ -1126,18 +1128,22 @@ void QGocatorWidget::onParameterChanged()
 
         Gocator* gocator = _gocator;
         auto future = QtConcurrent::run([gocator, target, path, valStr]() {
-            if (gocator)
-            {
-                try { gocator->setParameterValue(target, path, valStr); }
-                catch (const std::exception& error) {
-                    qCWarning(gocatorDiagnosticLog) << "Parameter write failed:" << error.what();
+            if (!gocator) return;
+            try {
+                const auto result = gocator->setParameterValue(target, path, valStr);
+                if (!result.applied) {
+                    // The sensor decides whether a running write is allowed; keep its reason.
+                    qCWarning(gocatorDiagnosticLog).noquote()
+                        << "Parameter write refused:" << QString::fromStdString(result.error);
                     return;
                 }
-                // The core reports SDK failures; this record confirms dispatch, not readback acceptance.
+                // This record confirms dispatch, not readback acceptance.
                 qCDebug(gocatorDiagnosticLog).noquote() << "@diagnostic " + QString::fromUtf8(QJsonDocument(QJsonObject{
                     {"event", "parameter_dispatched"}, {"fields", QJsonObject{
                     {"target", static_cast<int>(target)}, {"path", QString::fromStdString(path)},
                     {"requestedValue", QString::fromStdString(valStr)}, {"verification", "follow-up-resource-read"}}}}).toJson(QJsonDocument::Compact));
+            } catch (const std::exception& error) {
+                qCWarning(gocatorDiagnosticLog) << "Parameter write failed:" << error.what();
             }
         });
         _parameterUpdateActive = true;
