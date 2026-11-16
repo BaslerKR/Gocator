@@ -523,7 +523,15 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
                         stopped = singleRun->stopped;
                         delivered = singleRun->delivered;
                     }
-                    const bool started = stopped ? false : beginGrab(1);
+                    bool started = false;
+                    if (!stopped) {
+                        try {
+                            started = beginGrab(1);
+                        } catch (...) {
+                            _acquisitionStarting = false;
+                            throw;
+                        }
+                    }
                     _acquisitionStarting = false;
                     {
                         std::lock_guard<std::mutex> lock(singleRun->mutex);
