@@ -4,7 +4,7 @@
 # Repeat NAME=value to declare multiple environment paths for one variable.
 set(PLAYGROUND_PLUGIN_ID "gocator")
 set(PLAYGROUND_PLUGIN_VERSION "0.3.0")
-# IDevicePlugin/8.0 (standard connection lifecycle, hardware resource claims) first ships in Core 0.6.6.
+# IDevicePlugin/7.0 (standard connection lifecycle, hardware resource claims) first ships in Core 0.6.6.
 set(PLAYGROUND_PLUGIN_MINIMUM_CORE_VERSION "0.6.6")
 set(PLAYGROUND_PLUGIN_DISPLAY_NAME "Gocator")
 # Optional presentation metadata; consumers must export it to manifests/catalogs.
