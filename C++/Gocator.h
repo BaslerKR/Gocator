@@ -184,6 +184,10 @@ private:
     friend class GocatorConnectionControlTests;
     /** @brief Test seam: holds the connection control lock while the callbacks run. */
     void holdControlForTest(const std::function<void()>& entered, const std::function<void()>& release);
+    /** @brief Test seam: invokes one registered grab callback with an empty dataset. */
+    bool notifyGrabCallbackForTest(CallbackId id);
+    /** @brief Test seam: publishes one status transition to registered observers. */
+    void notifyStatusForTest(Status status, bool on);
 
     struct Impl;
     std::unique_ptr<Impl> _impl;

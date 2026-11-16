@@ -77,7 +77,9 @@ class GocatorConnectionControlTests : public QObject {
 private slots:
     void lifecycleAdmissionAndStaleGeneration();
     void singleAndLiveShareOneAuthority();
+    void pendingLiveStartBlocksSourceStart();
     void singleStopRacingStartStaysExplicit();
+    void registeredCallbacksCompleteSingle();
     void connectAcceptsUndiscoveredAddress();
     void discoverPublishesCacheAndFailureStaysSilent();
     void startWithoutConnectionReportsInactive();
@@ -361,7 +363,14 @@ void GocatorConnectionControlTests::singleAndLiveShareOneAuthority()
         DeviceConnectionError::Conflict);
     QCOMPARE(controller.requestDisconnect(connection, [&](auto) { ++completions; }).error,
         DeviceConnectionError::Busy);
-    controller.start();
+    bool startRefused = false;
+    try {
+        controller.start();
+    } catch (const std::runtime_error& error) {
+        startRefused = true;
+        QCOMPARE(std::string(error.what()), std::string("A single grab is in flight."));
+    }
+    QVERIFY(startRefused);
     QCOMPARE(fake.liveGrabs, std::size_t{1});
     QCOMPARE(completions, 0);
 
@@ -419,6 +428,90 @@ void GocatorConnectionControlTests::singleAndLiveShareOneAuthority()
     QCOMPARE(controller.requestLiveStop(connection + "-stale", [&](auto) { ++completions; }).error,
         DeviceConnectionError::Conflict);
     QCOMPARE(completions, 0);
+}
+
+void GocatorConnectionControlTests::pendingLiveStartBlocksSourceStart()
+{
+    FakeGocator fake;
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("192.168.1.10", done);
+    });
+    QVERIFY(connected.state);
+
+    // The live-start admission owns the acquisition authority before the SDK grab runs. A
+    // concurrent source.start or Single must not reach grab() and overwrite the producer.
+    std::atomic<bool> entered{false};
+    auto release = std::make_shared<std::promise<void>>();
+    auto releaseFuture = release->get_future().share();
+    controller._lifecycle.grab = [&fake, &entered, releaseFuture](std::size_t frames) {
+        entered = true;
+        releaseFuture.wait();
+        if (!fake.snapshot.opened || fake.diagnostics.grabbing || fake.refuseGrab) return false;
+        if (frames == 1) ++fake.singleGrabs;
+        else ++fake.liveGrabs;
+        fake.diagnostics.grabbing = true;
+        return true;
+    };
+
+    auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto future = promise->get_future();
+    QCOMPARE(controller.requestLiveStart(connected.state->connectionId,
+        [promise](DeviceConnectionResult result) { promise->set_value(std::move(result)); }).error,
+        DeviceConnectionError::None);
+    QTRY_VERIFY(entered.load());
+    QCOMPARE(fake.liveGrabs, std::size_t{0});
+
+    const auto single = controller.requestSingle(connected.state->connectionId, [](auto) {});
+    QCOMPARE(single.error, DeviceConnectionError::Busy);
+    QCOMPARE(single.message, std::string("Live acquisition is starting."));
+    bool startRefused = false;
+    try {
+        controller.start();
+    } catch (const std::runtime_error& error) {
+        startRefused = true;
+        QCOMPARE(std::string(error.what()), std::string("Live acquisition is already starting."));
+    }
+    QVERIFY(startRefused);
+    QCOMPARE(fake.liveGrabs, std::size_t{0});
+
+    release->set_value();
+    const auto live = future.get();
+    QCOMPARE(live.error, DeviceConnectionError::None);
+    QCOMPARE(fake.liveGrabs, std::size_t{1});
+    controller.stop();
+}
+
+void GocatorConnectionControlTests::registeredCallbacksCompleteSingle()
+{
+    // The real constructor registers the producer callbacks. Drive those callbacks directly so a
+    // missing registerGrabCallback/status wiring cannot pass as a successful fake delivery.
+    Gocator gocator;
+    GocatorSourceController controller(&gocator);
+    controller._lifecycle.snapshot = [] {
+        return Gocator::ConnectionSnapshot{true, 9, "10.0.0.9"};
+    };
+    controller._lifecycle.beginControl = [] { return true; };
+    controller._lifecycle.endControl = [] {};
+    controller._lifecycle.diagnostics = [] { return GocatorRuntimeDiagnostics{}; };
+    controller._lifecycle.grab = [](std::size_t) { return true; };
+    controller._lifecycle.stop = [] {};
+
+    auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto future = promise->get_future();
+    QCOMPARE(controller.requestSingle(controller.currentConnectionId(9),
+        [promise](DeviceConnectionResult result) { promise->set_value(std::move(result)); }).error,
+        DeviceConnectionError::None);
+    QTRY_VERIFY(controller._singleInFlight.load());
+    QVERIFY(controller._singleCallbackId != 0);
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+    QVERIFY(gocator.notifyGrabCallbackForTest(controller._singleCallbackId));
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
+
+    const auto single = future.get();
+    QCOMPARE(single.error, DeviceConnectionError::None);
+    QCOMPARE(single.effect, DeviceConnectionEffect::Applied);
 }
 
 void GocatorConnectionControlTests::singleStopRacingStartStaysExplicit()

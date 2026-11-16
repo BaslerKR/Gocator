@@ -194,8 +194,12 @@ private:
         IDeviceConnectionControl::Completion completion, TargetsCompletion targetsCompletion);
     /** @brief Copies the logical connection from the shared facade and cached target facts. */
     DeviceConnectionState connectionState() const;
-    /** @brief Starts continuous acquisition through the one acquisition authority. */
-    bool beginLive();
+    /** @brief Copies the observed producer acquisition state without SDK waits. */
+    bool liveActive() const;
+    /** @brief Starts continuous acquisition through the one acquisition authority.
+     *  @param reserved When true the caller already owns the start reservation.
+     */
+    bool beginLive(bool reserved);
     /** @brief Starts one acquisition run through the shared SDK seam. */
     bool beginGrab(std::size_t frames);
     /** @brief Reports one producer frame so a pending single can complete. */
@@ -229,6 +233,8 @@ private:
     std::shared_ptr<SingleRun> _singleRun;
     std::mutex _singleMutex;
     std::atomic<bool> _singleInFlight{false};
+    /** @brief Serializes a source.start or live-start admission before the SDK grab begins. */
+    std::atomic<bool> _acquisitionStarting{false};
 
     Gocator::CallbackId _statusCallbackId = 0;
     Gocator::CallbackId _singleCallbackId = 0;

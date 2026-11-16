@@ -96,10 +96,11 @@ frame is delivered, while `device.live-start`/`device.live-stop` call `grab()`
 and `stop()`. `source.start`/`source.stop` share that authority and never issue
 a second start. Single while Live is refused with
 "Stop Live before a single grab." and a second Single is refused while the first
-is in flight; neither refusal has an effect. A shared control gate serializes
-discovery, connect, disconnect and acquisition between the Qt widget and
-callable clients; a busy gate refuses with `busy`, and the widget disables its
-controls while callable work runs.
+is in flight; neither refusal has an effect. Discovery, connect and disconnect
+share one module control gate between the Qt widget and callable clients, and
+one acquisition reservation serializes `source.start` with live start so neither
+issues a second grab. A busy gate refuses with `busy`, and the widget disables
+its controls while callable work runs.
 
 Commands and Scanner/Sensor typed API targets remain explicitly unsupported;
 the existing Scanner/Sensor GUI resource editors remain available.
