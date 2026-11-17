@@ -8,37 +8,6 @@
 
 namespace {
 
-QVariantList toDiscoveryData(const std::vector<Gocator::DeviceInfo>& devices)
-{
-    QVariantList result;
-    result.reserve(static_cast<qsizetype>(devices.size()));
-    for (const Gocator::DeviceInfo& device : devices) {
-        result.append(QVariantMap{
-            {QStringLiteral("address"), QString::fromStdString(device.address)},
-            {QStringLiteral("model"), QString::fromStdString(device.model)},
-            {QStringLiteral("serial"), QString::fromStdString(device.serial)},
-            {QStringLiteral("isVirtual"), device.isVirtual},
-        });
-    }
-    return result;
-}
-
-std::vector<Gocator::DeviceInfo> fromDiscoveryData(const QVariantList& values)
-{
-    std::vector<Gocator::DeviceInfo> devices;
-    devices.reserve(static_cast<std::size_t>(values.size()));
-    for (const QVariant& value : values) {
-        const QVariantMap item = value.toMap();
-        devices.push_back({
-            item.value(QStringLiteral("address")).toString().toStdString(),
-            item.value(QStringLiteral("model")).toString().toStdString(),
-            item.value(QStringLiteral("serial")).toString().toStdString(),
-            item.value(QStringLiteral("isVirtual")).toBool(),
-        });
-    }
-    return devices;
-}
-
 class GocatorPluginTitleState final {
 public:
     QString title() const
@@ -120,7 +89,6 @@ public:
 
     QString title() const override { return _titleState->title(); }
 
-    std::vector<DevicePluginDock> createDockWidgets(QWidget*) override { return {}; }
     AbstractSourceController* sourceController() const override { return _controller.get(); }
     unsigned int capabilities() const noexcept override
     {
@@ -147,12 +115,15 @@ public:
     {
         return {QStringLiteral("gocator"), playgroundDevicePluginDisplayName(), playgroundDevicePluginVersion(), true};
     }
-    bool discoverDevices(QVariantMap* discoveryData, QString* errorMessage) override
+    bool discoverDevices(QString* errorMessage) override
     {
         try {
             auto gocator = std::make_unique<Gocator>();
             const auto devices = gocator->discoverDevices();
-            if (discoveryData) discoveryData->insert(QStringLiteral("devices"), toDiscoveryData(devices));
+            {
+                std::lock_guard<std::mutex> lock(_devicesMutex);
+                _devices = devices;
+            }
             return true;
         } catch (const std::exception& error) {
             if (errorMessage) *errorMessage = QString::fromLocal8Bit(error.what());
@@ -161,17 +132,26 @@ public:
     }
 
     std::unique_ptr<IDevicePluginSession> createSession(
-        const QVariantMap& discoveryData, QString* errorMessage) override
+        const QVariantMap& sessionOptions, QString* errorMessage) override
     {
+        Q_UNUSED(sessionOptions)
         try {
             auto gocator = std::make_unique<Gocator>();
-            return std::make_unique<GocatorPluginSession>(
-                std::move(gocator), fromDiscoveryData(discoveryData.value(QStringLiteral("devices")).toList()));
+            std::vector<Gocator::DeviceInfo> devices;
+            {
+                std::lock_guard<std::mutex> lock(_devicesMutex);
+                devices = _devices;
+            }
+            return std::make_unique<GocatorPluginSession>(std::move(gocator), std::move(devices));
         } catch (const std::exception& error) {
             if (errorMessage) *errorMessage = QString::fromLocal8Bit(error.what());
             return {};
         }
     }
+
+private:
+    mutable std::mutex _devicesMutex;
+    std::vector<Gocator::DeviceInfo> _devices;
 };
 
 #include "GocatorPlugin.moc"

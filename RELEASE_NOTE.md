@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Move to the widget-free session ABI: `discoverDevices` and `createSession` take only an error string and no longer exchange an opaque `QVariantMap`. Discovery retains its device catalog in a plugin-owned, mutex-guarded member that session creation consumes, and the session drops the obsolete `createDockWidgets`/dock override. The discovery serialization helpers are gone.
+
 - Build against the widget-free device runtime SDK: the contract target is `Playground::DeviceRuntimeContract`, headers live under `DeviceRuntime/Contract`, and the interface is `IDeviceRuntime`. The plugin object derives directly from `QObject`/`IDeviceRuntime`, so the package needs neither the widget-side template nor Qt Widgets headers.
 
 - Remove the Qt widget library and the widget tests. `QGocatorWidget`, `GocatorControlUi`, `GocatorAcquisitionSettings`, `GocatorQtWidget`, `GocatorPresentation` and `QGocatorWidgetTests` are gone; the plugin session creates no widget or dock and the host's common device panel owns the session UI. The scan settings the widget applied before a grab are exposed as typed parameters and written through the same `setParameterValue` route, including the former forced `exposureMode` value; no device behavior or parameter is lost. The package target links `Playground::DeviceRuntimeContract`, `Gocator::PlaygroundAdapter`, Qt Core and Qt Concurrent only: no Qt Widgets, Resources widget or dialog library, and no OpenGL.
