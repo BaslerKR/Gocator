@@ -1,9 +1,5 @@
 #include <QtTest/QtTest>
 
-#include <QComboBox>
-#include <QCoreApplication>
-#include <QRegularExpression>
-#include <QToolButton>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -16,7 +12,6 @@
 #include <vector>
 
 #include "Utility/PlaygroundAdapter/Source/GocatorSourceController.h"
-#include "Utility/Qt/QGocatorWidget.h"
 
 namespace {
 
@@ -41,38 +36,6 @@ struct FakeGocator {
     std::size_t stops = 0;
 };
 
-class FeatureRefreshWidget final : public QGocatorWidget {
-public:
-    using QGocatorWidget::QGocatorWidget;
-    using QGocatorWidget::fetchFeatureData;
-
-    void blockReads(std::shared_future<void> gate) { _gate = std::move(gate); }
-
-protected:
-    bool featureDataAvailable() const override { return true; }
-    FeatureDataResult readFeatureData(bool) const override {
-        if (_gate.valid()) _gate.wait();
-        FeatureDataResult result;
-        result.scannerData = QStringLiteral("{}");
-        result.sensorData = QStringLiteral("{}");
-        result.systemData = QStringLiteral("{}");
-        return result;
-    }
-
-private:
-    std::shared_future<void> _gate;
-};
-
-struct GateRelease {
-    std::shared_ptr<std::promise<void>> gate;
-    std::atomic<bool> released{false};
-
-    void release() {
-        if (!released.exchange(true)) gate->set_value();
-    }
-    ~GateRelease() { release(); }
-};
-
 } // namespace
 
 class GocatorConnectionControlTests : public QObject {
@@ -92,8 +55,6 @@ private slots:
     void startWithoutConnectionReportsInactive();
     void snapshotDoesNotWaitForControlLock();
     void busyGateAndTeardownDrain();
-    void guiAndApiShareControlGate();
-    void externalControlEndWaitsForFeatureWatcher();
 
 private:
     static void bind(GocatorSourceController& controller, FakeGocator& fake);
@@ -809,74 +770,6 @@ void GocatorConnectionControlTests::busyGateAndTeardownDrain()
     }
     QCOMPARE(teardownCompletions.load(), 1);
     QVERIFY(!fake.gate);
-}
-
-void GocatorConnectionControlTests::guiAndApiShareControlGate()
-{
-    Gocator gocator;
-    QGocatorWidget widget(nullptr, &gocator);
-    GocatorSourceController controller(&gocator);
-
-    auto* combo = widget.findChild<QComboBox*>(QStringLiteral("gocatorIpCombo"));
-    auto* refresh = widget.findChild<QToolButton*>(QStringLiteral("gocatorToolRefresh"));
-    auto* connect = widget.findChild<QToolButton*>(QStringLiteral("gocatorToolConnect"));
-    QVERIFY(combo);
-    QVERIFY(refresh);
-    QVERIFY(connect);
-
-    QVERIFY(gocator.tryBeginControl());
-    QTRY_VERIFY(!combo->isEnabled());
-    QTRY_VERIFY(!refresh->isEnabled());
-    QTRY_VERIFY(!connect->isEnabled());
-
-    widget.setDiscoveredDevices({{"192.168.1.10", "Gocator 2500", "12345", false}});
-    QVERIFY(!refresh->isEnabled());
-    QVERIFY(!connect->isEnabled());
-
-    int completions = 0;
-    QCOMPARE(controller.requestDiscover([&](auto) { ++completions; }).error,
-        DeviceConnectionError::Busy);
-    QCOMPARE(completions, 0);
-
-    QMetaObject::invokeMethod(&widget, "onConnectToggled", Qt::DirectConnection, Q_ARG(bool, true));
-    QVERIFY(!connect->isChecked());
-    QVERIFY(gocator.controlBusy());
-
-    gocator.endControl();
-    QTRY_VERIFY(combo->isEnabled());
-    QTRY_VERIFY(refresh->isEnabled());
-    QTRY_VERIFY(connect->isEnabled());
-}
-
-void GocatorConnectionControlTests::externalControlEndWaitsForFeatureWatcher()
-{
-    Gocator gocator;
-    FeatureRefreshWidget widget(nullptr, &gocator);
-    auto* refresh = widget.findChild<QToolButton*>(QStringLiteral("gocatorToolRefresh"));
-    auto* connect = widget.findChild<QToolButton*>(QStringLiteral("gocatorToolConnect"));
-    QVERIFY(refresh);
-    QVERIFY(connect);
-
-    auto gate = std::make_shared<std::promise<void>>();
-    GateRelease release{gate};
-    widget.blockReads(gate->get_future().share());
-    widget.fetchFeatureData(false);
-    QVERIFY(!refresh->isEnabled());
-    QVERIFY(!connect->isEnabled());
-
-    QTest::ignoreMessage(QtInfoMsg, QRegularExpression(QStringLiteral("Device control is active")));
-    QVERIFY(gocator.tryBeginControl());
-    QCoreApplication::processEvents();
-    QVERIFY(!connect->isEnabled());
-
-    gocator.endControl();
-    QCoreApplication::processEvents();
-    const bool deferred = !connect->isEnabled() && !refresh->isEnabled();
-
-    release.release();
-    QTRY_VERIFY(connect->isEnabled());
-    QTRY_VERIFY(refresh->isEnabled());
-    QVERIFY(deferred);
 }
 
 QTEST_MAIN(GocatorConnectionControlTests)

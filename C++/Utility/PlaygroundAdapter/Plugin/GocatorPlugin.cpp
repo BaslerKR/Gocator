@@ -1,10 +1,7 @@
-#include "DevicePluginTemplate.h"
+#include "DevicePluginSession.h"
 
 #include "GocatorSourceController.h"
 #include "Gocator.h"
-#include "Utility/Qt/QGocatorWidget.h"
-
-#include <QPointer>
 
 #include <memory>
 #include <mutex>
@@ -117,24 +114,22 @@ public:
     {
         _titleState->deactivate();
         if (_gocator && _statusCallback != 0) _gocator->deregisterStatusCallback(_statusCallback);
-        if (_widget) _widget->prepareForShutdown();
         _controller.reset();
         if (_gocator) _gocator->close();
     }
 
     QString title() const override { return _titleState->title(); }
-    std::vector<DevicePluginDock> createDockWidgets(QWidget* parent) override
+
+    // The retired Qt widget stored feature favourites under this key through the
+    // host's PluginFeatureTreeSearch. The common panel keeps the namespace so
+    // saved favourites carry over without a migration. The encoded component is
+    // base64url(JSON(["GocatorFeaturesTree"])), the tree's objectName.
+    DeviceSessionMetadata sessionMetadata() const override
     {
-        if (!_widget) {
-            _widget = new QGocatorWidget(parent, _gocator.get());
-            _widget->setDiscoveredDevices(_gocator->cachedDevices());
-            QObject::connect(_controller.get(), &GocatorSourceController::inventoryChanged, _widget, [this] {
-                if (_widget) _widget->setDiscoveredDevices(_gocator->cachedDevices());
-            });
-        }
-        return {{QStringLiteral("device-controls"), QStringLiteral("Device Controls"),
-                 Qt::LeftDockWidgetArea, _widget, true}};
+        return {QStringLiteral("UI/FeatureTrees/WyJHb2NhdG9yRmVhdHVyZXNUcmVlIl0=/Favorites")};
     }
+
+    std::vector<DevicePluginDock> createDockWidgets(QWidget*) override { return {}; }
     AbstractSourceController* sourceController() const override { return _controller.get(); }
     unsigned int capabilities() const noexcept override
     {
@@ -147,12 +142,11 @@ private:
     std::unique_ptr<Gocator> _gocator;
     std::vector<Gocator::DeviceInfo> _devices;
     std::unique_ptr<GocatorSourceController> _controller;
-    QPointer<QGocatorWidget> _widget;
     Gocator::CallbackId _statusCallback = 0;
     std::shared_ptr<GocatorPluginTitleState> _titleState = std::make_shared<GocatorPluginTitleState>();
 };
 
-class GocatorPlugin final : public DevicePluginTemplate {
+class GocatorPlugin final : public QObject, public IDeviceRuntime {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID PlaygroundDeviceRuntime_iid)
     Q_INTERFACES(IDeviceRuntime)

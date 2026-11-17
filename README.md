@@ -8,14 +8,14 @@ Gocator is a C++17 acquisition and configuration facade for LMI Gocator sensors 
 - Receive `GoDataSet` profile or surface payloads through registered callbacks.
 - Configure scan length, scan mode, exposure, intensity, and uniform spacing.
 - Read parameter schemas and values or write individual scanner and sensor parameters through the REST resources; scanner resources include firmware-exposed motion and alignment settings.
-- Preserve schema-provided numeric precision and increments in the optional Qt feature editor, including sub-unit spacing values.
-- Build an optional Qt 6 feature widget without adding Qt to the core target.
+- Preserve schema-provided numeric precision and increments in the typed parameter descriptors consumed by the host device panel, including sub-unit spacing values.
+- Ship a widget-free Playground device package; the host's common device panel owns the session UI.
 
 ## Requirements
 
 - CMake 3.20 or newer and a C++17 compiler.
 - A GoPxL SDK whose headers and libraries match the target operating system, architecture, compiler, and build configuration.
-- Qt 6 Widgets and Concurrent only when `GOCATOR_BUILD_QT_UI=ON`.
+- Qt 6 Core and Concurrent only when the Playground device plugin is built; no Qt Widgets, Resources widget or OpenGL dependency.
 
 The repository-local SDK layout is documented in [GoPxL-SDK/README.md](GoPxL-SDK/README.md). Set `GOPXL_SDK_DIR` to another compatible SDK root when necessary. Automatic selection supports only the architectures represented by the bundled directories and resolves Debug separately under multi-config generators. `GOPXL_PLATFORM_DIR` overrides the automatic directory for every configuration; the caller is then responsible for supplying a configuration-compatible SDK directory.
 
@@ -24,24 +24,15 @@ Consumers that stage SDK runtimes can read `GOCATOR_GOPXL_SDK_DIR`, `GOCATOR_GOP
 ## Integration
 
 ```cmake
-set(GOCATOR_BUILD_QT_UI OFF CACHE BOOL "" FORCE)
 add_subdirectory(path/to/Gocator/C++ Gocator-build)
 target_link_libraries(consumer PRIVATE gocator_core)
 ```
 
-Qt integration is explicit and disabled by default. A Qt consumer enables the option and links only the UI target; `Gocator::QtWidget` brings in `gocator_core`, Qt Widgets, and Qt Concurrent transitively:
-
-```cmake
-set(GOCATOR_BUILD_QT_UI ON CACHE BOOL "" FORCE)
-add_subdirectory(path/to/Gocator/C++ Gocator-build)
-target_link_libraries(qt_consumer PRIVATE Gocator::QtWidget)
-```
-
-Requesting the UI without an available Qt 6 Widgets/Concurrent package is a configure error. The contents and public dependencies of `gocator_core` do not change when the UI is enabled.
+Configuring the core never searches for or links Qt. There is no widget target: the Playground device package is widget-free and the host device panel owns discovery, connect, Single, Live and feature browsing. The scan settings the retired widget applied before a grab are ordinary typed parameters; a consumer writes them through the same `setParameterValue` route before `source.start`.
 
 The optional Playground adapter is disabled by default. Enable `GOCATOR_BUILD_PLAYGROUND_ADAPTER` only when the neutral GraphicsEngine contract target is available. Consumers that want owned frames include `Utility/PlaygroundAdapter/GocatorGraphicsFrameStream.h` and link `Gocator::PlaygroundAdapter`; GDP conversion stays in `GocatorDataSetGraphicsFrameAdapter`.
 
-The optional Playground device plugin is a separate MODULE. Enable `GOCATOR_BUILD_PLAYGROUND_PLUGIN` only when `Playground::DeviceRuntimeContract`, the adapter, and `Gocator::QtWidget` are available. Package identity lives in `Utility/PlaygroundAdapter/Package/Package.cmake` as quoted `set(PLAYGROUND_PLUGIN_* ...)` assignments; the MODULE must set `PLAYGROUND_PLUGIN_PACKAGE` and include `DeviceRuntime/Contract/DeviceRuntime.h`. The host emits `plugin.json` from that identity plus `DeviceRuntime.h`.
+The optional Playground device plugin is a separate MODULE. Enable `GOCATOR_BUILD_PLAYGROUND_PLUGIN` only when `Playground::DeviceRuntimeContract` and the adapter are available; the plugin links Qt Core and Concurrent only. Package identity lives in `Utility/PlaygroundAdapter/Package/Package.cmake` as quoted `set(PLAYGROUND_PLUGIN_* ...)` assignments; the MODULE must set `PLAYGROUND_PLUGIN_PACKAGE` and include `DeviceRuntime/Contract/DeviceRuntime.h`. The host emits `plugin.json` from that identity plus `DeviceRuntime.h`.
 
 ## Acquisition Contract
 
@@ -116,15 +107,14 @@ types are not converted into speculative editors.
 
 ## Validation
 
-`GOCATOR_BUILD_TESTS=ON` requires `GOCATOR_BUILD_QT_UI=ON` because the focused test executable exercises `QGocatorWidget`. A successful build establishes only compile/link compatibility; discovery, REST configuration, profile/surface payloads, reconnect behavior, and throughput require validation with the intended SDK package and sensor firmware.
+`GOCATOR_BUILD_TESTS=ON` builds the controller, adapter and parameter-loopback tests; no widget test remains. A successful build establishes only compile/link compatibility; discovery, REST configuration, profile/surface payloads, reconnect behavior, and throughput require validation with the intended SDK package and sensor firmware.
 
 ## Installed consumer SDK plugin build
 
 Build the existing plugin project using this repository, an installed Plugin
 SDK, the matching Qt kit and its vendor SDK. No consumer source tree or
-renderer is needed. The plugin switch enables its owning widget/adapter
-(and vendor SDK implementation where required). Theme installation remains
-consumer-owned.
+renderer is needed. The plugin switch enables its adapter and vendor SDK
+implementation; no widget or theme installation is pulled into the package.
 
 ```sh
 cmake -S C++ -B build/plugin -DCMAKE_PREFIX_PATH="<PluginSDK>;<Qt-prefix>" -DCMAKE_CONFIGURATION_TYPES=Release -DCMAKE_BUILD_TYPE=Release -DGOCATOR_BUILD_PLAYGROUND_PLUGIN=ON -DGOCATOR_BUILD_TESTS=ON
@@ -140,12 +130,16 @@ It includes the manifest, icon and SDK identity. Staging reconciles only this
 generated package. Use a fresh build directory or explicitly update
 `PlaygroundPluginSDK_DIR` when selecting another SDK. This Release software
 gate does not establish physical-device, Debug or cross-platform acceptance.
-Set `CMAKE_BUILD_TYPE=Release` for a single-configuration generator.
+Set `CMAKE_BUILD_TYPE=Release` for a single-configuration generator. The staged
+package links no Qt Widgets, Resources widget/dialog library or OpenGL; check
+its binaries with `otool -L` on macOS, `readelf -d` on Linux or `dumpbin` on
+Windows.
 
-## Qt presentation
+## Favourites key
 
-`C++/Utility/Qt` provides the SDK-independent `GocatorPresentation` target.
-The runtime Qt widget and isolated presentation consumers use the same
-`GocatorControlUi` composition; device discovery, feature access and
-acquisition remain in the runtime widget. The presentation target does not
-install an application theme.
+The session declares `UI/FeatureTrees/WyJHb2NhdG9yRmVhdHVyZXNUcmVlIl0=/Favorites`
+through `DeviceSessionMetadata::favoritesSettingsKey`. The encoded component is
+base64url(JSON(["GocatorFeaturesTree"])), the object name of the retired
+`GocatorControlUi` feature tree that the host's `PluginFeatureTreeSearch` used
+as its settings namespace. The host panel keeps that key so saved favourites
+carry over without a migration.
