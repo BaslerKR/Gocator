@@ -4,12 +4,15 @@
 #include <QCoreApplication>
 #include <QRegularExpression>
 #include <QToolButton>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <future>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Utility/PlaygroundAdapter/Source/GocatorSourceController.h"
@@ -82,6 +85,9 @@ private slots:
     void singleGrabThrowReleasesStartReservation();
     void registeredCallbacksCompleteSingle();
     void connectAcceptsUndiscoveredAddress();
+    void virtualTargetsGetDistinctAddressIdentity();
+    void duplicateDiscoveryCollapsesToSingleTarget();
+    void realSensorIdentitySurvivesAddressChange();
     void discoverPublishesCacheAndFailureStaysSilent();
     void startWithoutConnectionReportsInactive();
     void snapshotDoesNotWaitForControlLock();
@@ -608,6 +614,83 @@ void GocatorConnectionControlTests::connectAcceptsUndiscoveredAddress()
     QCOMPARE(connected.state->targetId, std::string("10.20.30.40"));
     QCOMPARE(connected.state->displayName, std::string("10.20.30.40"));
     QCOMPARE(fake.opens, 1);
+}
+
+void GocatorConnectionControlTests::virtualTargetsGetDistinctAddressIdentity()
+{
+    FakeGocator fake;
+    fake.devices = {
+        {"192.168.0.105", "", "0", true},
+        {"192.168.1.100", "", "0", true},
+        {"192.168.0.153", "", "0", true},
+        {"10.0.0.7", "", "0", true},
+    };
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    const auto targets = awaitTargets(controller, [&](auto done) {
+        return controller.requestConnectionTargets(done);
+    });
+    QCOMPARE(targets.result.error, DeviceConnectionError::None);
+    QCOMPARE(targets.targets.size(), std::size_t{4});
+
+    std::set<std::vector<std::pair<std::string, std::string>>> identities;
+    for (std::size_t i = 0; i < targets.targets.size(); ++i) {
+        const auto& target = targets.targets[i];
+        std::vector<std::pair<std::string, std::string>> identity;
+        for (const auto& attribute : target.attributes)
+            identity.emplace_back(attribute.name, attribute.value);
+        std::sort(identity.begin(), identity.end());
+        QVERIFY2(identities.insert(identity).second,
+            "virtual targets must carry distinct identity attributes");
+        bool hasAddress = false;
+        for (const auto& attribute : target.attributes) {
+            if (attribute.name != "address") continue;
+            hasAddress = true;
+            QCOMPARE(attribute.value, fake.devices[i].address);
+        }
+        QVERIFY(hasAddress);
+    }
+    QCOMPARE(identities.size(), std::size_t{4});
+}
+
+void GocatorConnectionControlTests::duplicateDiscoveryCollapsesToSingleTarget()
+{
+    FakeGocator fake;
+    fake.devices = {
+        {"192.168.0.105", "", "0", true},
+        {"192.168.0.105", "", "0", true},
+        {"192.168.0.105", "", "0", true},
+    };
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    const auto targets = awaitTargets(controller, [&](auto done) {
+        return controller.requestConnectionTargets(done);
+    });
+    QCOMPARE(targets.result.error, DeviceConnectionError::None);
+    QCOMPARE(targets.targets.size(), std::size_t{1});
+    QCOMPARE(targets.targets[0].targetId, std::string("192.168.0.105"));
+}
+
+void GocatorConnectionControlTests::realSensorIdentitySurvivesAddressChange()
+{
+    const auto attributesFor = [](const std::string& address) {
+        FakeGocator fake;
+        fake.devices = {{address, "Gocator 2500", "12345", false}};
+        GocatorSourceController controller(nullptr);
+        bind(controller, fake);
+        const auto targets = awaitTargets(controller, [&](auto done) {
+            return controller.requestConnectionTargets(done);
+        });
+        return targets.targets.at(0).attributes;
+    };
+    const auto before = attributesFor("192.168.1.10");
+    const auto after = attributesFor("192.168.1.20");
+    QCOMPARE(before.size(), after.size());
+    for (std::size_t i = 0; i < before.size(); ++i) {
+        QCOMPARE(before[i].name, after[i].name);
+        QCOMPARE(before[i].value, after[i].value);
+        QVERIFY(before[i].name != "address");
+    }
 }
 
 void GocatorConnectionControlTests::discoverPublishesCacheAndFailureStaysSilent()

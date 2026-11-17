@@ -1,7 +1,9 @@
 #include "GocatorSourceController.h"
 #include <QUuid>
 #include <QtConcurrent>
+#include <set>
 #include <stdexcept>
+#include <tuple>
 #include "engine/GraphicsFrame.h"
 #include "DeviceRuntime/Contract/SessionFrame.h"
 #include "Utility/PlaygroundAdapter/GocatorGraphicsFrameStream.h"
@@ -17,11 +19,22 @@ DeviceConnectionTargets copiedTargets(const std::vector<Gocator::DeviceInfo>& de
 {
     DeviceConnectionTargets result;
     result.targets.reserve(devices.size());
+    std::set<std::tuple<std::string, std::string, std::string, bool>> reported;
     for (const auto& device : devices) {
-        result.targets.push_back({
-            device.address,
+        const auto identity = std::make_tuple(device.address, device.model, device.serial, device.isVirtual);
+        if (!reported.insert(identity).second) continue;
+        std::vector<DeviceConnectionAttribute> attributes{
+            {"model", device.model},
+            {"serial", device.serial},
+            {"virtual", device.isVirtual ? "true" : "false"}};
+        // A virtual or serial-less device has no stable serial, so its index-free address is the
+        // identity attribute that keeps distinct sensors apart in the Host's stable inventory.
+        // Real sensors keep the serial-based identity so a DHCP address change does not rename them.
+        if (device.isVirtual || device.serial.empty() || device.serial == "0")
+            attributes.push_back({"address", device.address});
+        result.targets.push_back({device.address,
             Gocator::formatDeviceName(device.model, device.serial, device.address, device.isVirtual),
-            {{"model", device.model}, {"serial", device.serial}, {"virtual", device.isVirtual ? "true" : "false"}}});
+            std::move(attributes)});
     }
     return result;
 }
