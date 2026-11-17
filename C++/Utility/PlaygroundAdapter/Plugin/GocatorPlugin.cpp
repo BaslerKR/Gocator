@@ -1,4 +1,4 @@
-#include "DevicePluginSession.h"
+#include "DeviceRuntime/Contract/DevicePluginSession.h"
 
 #include "GocatorSourceController.h"
 #include "Gocator.h"

@@ -268,7 +268,6 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Source"
         "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Plugin"
-        "${PlaygroundPluginSDK_WIDGET_INCLUDE_DIR}"
     )
     target_link_libraries(GocatorPlugin PRIVATE
         Playground::DeviceRuntimeContract
@@ -292,7 +291,7 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
         endif()
         playground_sdk_package_plugin(GocatorPlugin
             PACKAGE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/Package.cmake"
-            ICON "${PlaygroundPluginSDK_ICON_DIR}/lmi-48.png")
+            ICON "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/icon.png")
     endif()
     if(GOCATOR_BUILD_TESTS)
         add_executable(GocatorParameterControlTests
