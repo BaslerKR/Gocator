@@ -7,6 +7,7 @@
 - Accept an undiscovered address in `requestConnect` and report the SDK's refusal reason when GoPxL cannot reach it.
 - Add the standard `device.single`, `device.live-start` and `device.live-stop` lifecycle over `grab(1)`, `grab()` and `stop()`. Single completes after its frame is delivered; Live and Single share one acquisition authority with `source.start`/`source.stop`, so neither path issues a second start. Single while Live is refused with "Stop Live before a single grab.", and a second Single is refused while the first is in flight; refusals carry their reason and have no effect.
 - Cover the controller through the Playground parameter loopback codec and synthetic structure, notification, overflow, refusal and acquisition-setting tests.
+- Give virtual and serial-less targets an index-free `address` identity attribute and drop exact duplicate discovery entries, so distinct sensors no longer collide in the Host's stable-target inventory. Real sensors keep their serial-based identity across DHCP address changes.
 
 - Deliver 3D range frames through the GraphicsEngine range writer into Playground shared frame storage. A controller that provides storage gets every range channel stored once in its slot; an empty storage result drops the frame instead of copying it elsewhere.
 
