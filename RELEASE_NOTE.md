@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Declare device panel presentation in package session metadata.
+
 - Ship the package icon from this repository (`C++/Utility/PlaygroundAdapter/Package/icon.png`) instead of the SDK-installed Resources brand asset. Include `DeviceRuntime/Contract/DevicePluginSession.h` from the contract include root; the SDK no longer installs a `PlaygroundWidget` header path or vendor icons.
 
 - Move to the widget-free session ABI: `discoverDevices` and `createSession` take only an error string and no longer exchange an opaque `QVariantMap`. Discovery retains its device catalog in a plugin-owned, mutex-guarded member that session creation consumes, and the session drops the obsolete `createDockWidgets`/dock override. The discovery serialization helpers are gone.
