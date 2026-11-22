@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "Internal/GocatorConnection.h"
+#include "Internal/GocatorOutputPreparation.h"
 #include "GocatorDiscoveryDiagnostics.h"
 #include "GrabCallbackState.h"
 #include "Internal/GocatorDiscovery.h"
@@ -157,6 +158,9 @@ std::string Gocator::formatDeviceName(const std::string& model, const std::strin
 
 struct Gocator::Impl
 {
+    explicit Impl(std::function<void(gocator::OutputPreparationFailure)> observer = {})
+        : outputFailure(std::move(observer)) {}
+    const std::function<void(gocator::OutputPreparationFailure)> outputFailure;
     mutable std::recursive_mutex controlMutex;
     std::uint64_t connectionGeneration = 0;
     std::string ipAddress;
@@ -336,41 +340,36 @@ struct Gocator::Impl
     {
         if (!isOpened.load() || !resources) return;
 
-        try
-        {
-            const std::string engineId = detectEngineId(*resources);
-            const std::string scannerPath = "/scan/engines/" + engineId + "/scanners/scanner-0";
-            ScanMode mode = ScanMode::ProfileMode;
-            try
-            {
-                const auto data = resources->data(scannerPath);
-                if (data.At("/parameters/scanModeSettings/scanMode").Get<int>() == 3)
-                {
-                    mode = ScanMode::SurfaceMode;
+        std::string engineId;
+        ScanMode mode = ScanMode::ProfileMode;
+        gocator::prepareOutput(
+            [&] {
+                engineId = detectEngineId(*resources);
+                const std::string scannerPath = "/scan/engines/" + engineId + "/scanners/scanner-0";
+                try {
+                    const auto data = resources->data(scannerPath);
+                    if (data.At("/parameters/scanModeSettings/scanMode").Get<int>() == 3)
+                        mode = ScanMode::SurfaceMode;
+                } catch (...) {
+                    // A firmware variant without scanModeSettings keeps the profile output.
                 }
-            }
-            catch (...)
-            {
-                // A firmware variant without scanModeSettings keeps the profile output.
-            }
-
-            resources->update(GOCATOR_CONTROL_PATH, GoPxLSdk::GoJson(R"({"enabled": true})"));
-            try
-            {
-                resources->call(GOCATOR_REMOVE_ALL_OUTPUT_PATH, GoPxLSdk::GoJson("{}"));
-            }
-            catch (...) {}
-
-            const std::string sourceId = profileSourceForEngine(engineId, mode);
-            std::string addOutputPayload = R"({"source":")" + sourceId + R"(","outputId":0,"autoShift":true})";
-            resources->call(GOCATOR_ADD_OUTPUT_PATH, GoPxLSdk::GoJson(addOutputPayload));
-            Gocator::syslog("Gocator acquisition output: engine=" + engineId + " source=" + sourceId + ".");
-        }
-        catch (const std::exception& e)
-        {
-            // Output setup failure is reported; the producer itself decides whether it starts.
-            Gocator::syslog("Gocator acquisition output setup failed: " + std::string(e.what()), true);
-        }
+            },
+            [&] { resources->update(GOCATOR_CONTROL_PATH, GoPxLSdk::GoJson(R"({"enabled": true})")); },
+            [&] { resources->call(GOCATOR_REMOVE_ALL_OUTPUT_PATH, GoPxLSdk::GoJson("{}")); },
+            [&] {
+                const std::string sourceId = profileSourceForEngine(engineId, mode);
+                std::string payload = R"({"source":")" + sourceId + R"(","outputId":0,"autoShift":true})";
+                resources->call(GOCATOR_ADD_OUTPUT_PATH, GoPxLSdk::GoJson(payload));
+                Gocator::syslog("Gocator acquisition output: engine=" + engineId + " source=" + sourceId + ".");
+            },
+            [this](gocator::OutputPreparationFailure stage) {
+                if (outputFailure) {
+                    try { outputFailure(stage); return; } catch (...) {}
+                }
+                const char* step = stage == gocator::OutputPreparationFailure::Preparation ? "preparation"
+                    : stage == gocator::OutputPreparationFailure::Enable ? "enable" : "registration";
+                Gocator::syslog(std::string("Gocator acquisition output ") + step + " failed.", true);
+            });
     }
 
     Gocator::ParameterWriteResult setParameterValue(ParameterTarget target, const std::string& path,
@@ -563,8 +562,10 @@ struct Gocator::Impl
     }
 };
 
-Gocator::Gocator()
-    : _impl(std::make_unique<Impl>())
+Gocator::Gocator() : Gocator(std::function<void(gocator::OutputPreparationFailure)>{}) {}
+
+Gocator::Gocator(std::function<void(gocator::OutputPreparationFailure)> outputFailure)
+    : _impl(std::make_unique<Impl>(std::move(outputFailure)))
 {
     syslog("New Gocator instance created.");
 }

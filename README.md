@@ -105,6 +105,8 @@ this does not turn two remote SDK observations into an atomic device snapshot
 or establish a settings-to-frame fence. Structured arrays and unsupported schema
 types are not converted into speculative editors.
 
+Acquisition output setup reports at most one operational failure per attempt. The optional package-wide diagnostic sink receives only the failed preparation, enable or registration stage; when no sink is installed, a concise warning names that stage. The SDK exception text and device identities are omitted from this observation. An output setup failure still allows GDP and start to proceed; the observation does not establish whether acquisition or frame delivery succeeded. An absent connection and the deliberately tolerated scan-mode and remove-all exceptions do not produce this event. The sink is copied when each session is created and its owner keeps it valid until sessions and producer work have stopped.
+
 ## Validation
 
 `GOCATOR_BUILD_TESTS=ON` builds the controller, adapter and parameter-loopback tests; no widget test remains. A successful build establishes only compile/link compatibility; discovery, REST configuration, profile/surface payloads, reconnect behavior, and throughput require validation with the intended SDK package and sensor firmware.

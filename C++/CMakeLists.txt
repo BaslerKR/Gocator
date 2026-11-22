@@ -164,6 +164,17 @@ target_link_libraries(gocator_core
 if(GOCATOR_BUILD_TESTS)
     find_package(Qt6 REQUIRED COMPONENTS Test)
     enable_testing()
+    add_executable(GocatorOutputPreparationTests tests/GocatorOutputPreparationTests.cpp)
+    set_target_properties(GocatorOutputPreparationTests PROPERTIES AUTOMOC ON)
+    target_include_directories(GocatorOutputPreparationTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(GocatorOutputPreparationTests PRIVATE Qt6::Test)
+    if(WIN32)
+        add_test(NAME GocatorOutputPreparationTests COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:GocatorOutputPreparationTests>)
+    else()
+        add_test(NAME GocatorOutputPreparationTests COMMAND GocatorOutputPreparationTests)
+    endif()
 endif()
 
 set(gocator_runtime_targets

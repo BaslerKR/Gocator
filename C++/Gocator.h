@@ -9,6 +9,11 @@
 #include <optional>
 #include <stdexcept>
 
+namespace gocator {
+/** @brief Stage whose outer SDK operation failed while preparing acquisition output. */
+enum class OutputPreparationFailure { Preparation, Enable, Registration };
+}
+
 namespace GoPxLSdk
 {
 class GoDataSet;
@@ -28,6 +33,8 @@ public:
     using CallbackId = size_t;
 
     Gocator();
+    /** @brief Creates an instance with an optional non-throwing output failure observer. */
+    explicit Gocator(std::function<void(gocator::OutputPreparationFailure)> outputFailure);
     ~Gocator();
 
     enum Status {

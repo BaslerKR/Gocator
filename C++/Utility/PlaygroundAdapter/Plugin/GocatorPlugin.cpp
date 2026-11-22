@@ -1,8 +1,10 @@
 #include "DeviceRuntime/Contract/DevicePluginSession.h"
+#include "DeviceRuntime/Contract/DeviceOperationalDiagnostics.h"
 
 #include "GocatorSourceController.h"
 #include "Gocator.h"
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 
@@ -105,12 +107,17 @@ private:
     std::shared_ptr<GocatorPluginTitleState> _titleState = std::make_shared<GocatorPluginTitleState>();
 };
 
-class GocatorPlugin final : public QObject, public IDeviceRuntime {
+class GocatorPlugin final : public QObject, public IDeviceRuntime, public IDeviceOperationalDiagnostics {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID PlaygroundDeviceRuntime_iid)
-    Q_INTERFACES(IDeviceRuntime)
+    Q_INTERFACES(IDeviceRuntime IDeviceOperationalDiagnostics)
 
 public:
+    void setOperationalDiagnosticSink(DeviceOperationalDiagnosticSink sink) noexcept override
+    {
+        _operationalSink.store(sink, std::memory_order_release);
+    }
+
     DevicePluginDescriptor descriptor() const override
     {
         return {QStringLiteral("gocator"), playgroundDevicePluginDisplayName(), playgroundDevicePluginVersion(), true};
@@ -136,7 +143,17 @@ public:
     {
         Q_UNUSED(sessionOptions)
         try {
-            auto gocator = std::make_unique<Gocator>();
+            const auto sink = _operationalSink.load(std::memory_order_acquire);
+            std::function<void(gocator::OutputPreparationFailure)> observer;
+            if (sink) observer = [sink](gocator::OutputPreparationFailure stage) noexcept {
+                const auto code = stage == gocator::OutputPreparationFailure::Preparation
+                    ? DeviceOperationalDiagnostic::AcquisitionOutputPreparationFailed
+                    : stage == gocator::OutputPreparationFailure::Enable
+                        ? DeviceOperationalDiagnostic::AcquisitionOutputEnableFailed
+                        : DeviceOperationalDiagnostic::AcquisitionOutputRegistrationFailed;
+                sink(code);
+            };
+            auto gocator = std::make_unique<Gocator>(std::move(observer));
             std::vector<Gocator::DeviceInfo> devices;
             {
                 std::lock_guard<std::mutex> lock(_devicesMutex);
@@ -150,6 +167,7 @@ public:
     }
 
 private:
+    std::atomic<DeviceOperationalDiagnosticSink> _operationalSink{nullptr};
     mutable std::mutex _devicesMutex;
     std::vector<Gocator::DeviceInfo> _devices;
 };

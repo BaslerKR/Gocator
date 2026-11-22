@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Report acquisition output preparation failures by stage through the optional operational diagnostic sink, with a concise warning when no sink is installed.
+
 - Declare device panel presentation in package session metadata.
 
 - Ship the package icon from this repository (`C++/Utility/PlaygroundAdapter/Package/icon.png`) instead of the SDK-installed Resources brand asset. Include `DeviceRuntime/Contract/DevicePluginSession.h` from the contract include root; the SDK no longer installs a `PlaygroundWidget` header path or vendor icons.
