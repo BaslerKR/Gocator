@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Report GDP range assembly failures, destination storage failures, and retained range state through the optional range diagnostic sink.
+
 - Report acquisition output preparation failures by stage through the optional operational diagnostic sink, with a concise warning when no sink is installed.
 - Verify the three output failure diagnostic mappings when building the package and cover continuation after an output removal failure.
 

@@ -8,15 +8,19 @@
 #include "engine/GraphicsFrameAdapter.h"
 #include "engine/GraphicsImageWriter.h"
 
+#include <functional>
 #include <memory>
 
 class Gocator;
+struct GocatorRangeRejection;
 
 /** Owns Gocator SDK callback registration and emits only owned GraphicsFrame values. */
 class GocatorGraphicsFrameStream final
 {
 public:
-    GocatorGraphicsFrameStream(Gocator* gocator, GraphicsFrameCallback callback);
+    using RejectedRange = std::function<void(const GocatorRangeRejection&, std::size_t)>;
+    GocatorGraphicsFrameStream(Gocator* gocator, GraphicsFrameCallback callback,
+                               RejectedRange rejectedRange = {});
     ~GocatorGraphicsFrameStream();
 
     GocatorGraphicsFrameStream(const GocatorGraphicsFrameStream&) = delete;

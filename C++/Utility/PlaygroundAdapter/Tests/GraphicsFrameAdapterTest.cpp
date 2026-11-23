@@ -66,6 +66,11 @@ public:
         message.frameIndex = frameIndex;
     }
 
+    static void setSurfaceWidth(GoPxLSdk::GoGdpSurfaceUniform& message, k32u width)
+    {
+        message.width = width;
+    }
+
     static void setUniformSurface(GoPxLSdk::GoGdpSurfaceUniform& message,
                                   const k32u width,
                                   const k32u height,
@@ -269,10 +274,35 @@ int main()
     rangeRequest.components = GraphicsFrameComponent::Range;
     rangeRequest.includeRangeAuxiliaryChannels = true;
     assert(!adapter.convertFrame(empty, rangeRequest).has_value());
+    GocatorRangeRejection rejection;
+    using Rejection = GocatorRangeRejection::Reason;
+    assert(!adapter.convertFrameWithRejection(empty, rangeRequest, rejection).has_value());
+    assert(rejection.reason == Rejection::MissingRange);
 
     GraphicsFrameRequest pointCloudOnly;
     pointCloudOnly.components = GraphicsFrameComponent::PointCloud;
     assert(!adapter.convertFrame(empty, pointCloudOnly).has_value());
+    assert(!adapter.convertFrameWithRejection(empty, pointCloudOnly, rejection).has_value());
+    assert(rejection.reason == Rejection::None);
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto shortSurface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        auto validSurface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        for (const auto& surface : {shortSurface, validSurface}) {
+            GoGdpMsgTests::setUniformSurface(*surface, 2, 1,
+                {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {1, 2}, {});
+        }
+        GoGdpMsgTests::setSurfaceWidth(*shortSurface, 3);
+        dataSet.Add(shortSurface);
+        dataSet.Add(validSurface);
+        const auto converted = adapter.convertFrameWithRejection(dataSet, rangeRequest, rejection);
+        assert(converted && converted->ranges.size() == 1U);
+        assert(rejection.reason == Rejection::TruncatedData);
+        assert(rejection.partCount == 2U && rejection.part == 0U);
+        assert(rejection.width == 3U && rejection.height == 1U);
+        assert(rejection.rangeRetained);
+    }
 
     // Synthetic uniform surface with a stamp, auxiliary intensity, null sensor
     // codes and calibration. The adapter must keep every field and store the
@@ -434,7 +464,10 @@ int main()
         GoGdpMsgTests::setUniformSurface(*surface, 2, 1,
             {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {1, 2}, {});
         dataSet.Add(surface);
-        assert(!adapter.convertFrame(dataSet, rangeRequest).has_value());
+        assert(!adapter.convertFrameWithRejection(dataSet, rangeRequest, rejection).has_value());
+        assert(rejection.reason == Rejection::StorageRefused);
+        assert(rejection.part == 1U && rejection.requestedStorageBytes > 0U);
+        assert(!rejection.rangeRetained);
         adapter.setFrameStorage({});
     }
 

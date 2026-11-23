@@ -84,9 +84,10 @@ private:
 
 class GocatorPluginSession final : public IDevicePluginSession {
 public:
-    GocatorPluginSession(std::unique_ptr<Gocator> gocator, std::vector<Gocator::DeviceInfo> devices)
+    GocatorPluginSession(std::unique_ptr<Gocator> gocator, std::vector<Gocator::DeviceInfo> devices,
+                         DeviceRangeRejectionSink rangeRejectionSink)
         : _gocator(std::move(gocator)), _devices(std::move(devices)),
-          _controller(std::make_unique<GocatorSourceController>(_gocator.get()))
+          _controller(std::make_unique<GocatorSourceController>(_gocator.get(), nullptr, rangeRejectionSink))
     {
         _gocator->setCachedDevices(_devices);
         std::weak_ptr<GocatorPluginTitleState> titleState = _titleState;
@@ -127,15 +128,20 @@ private:
     std::shared_ptr<GocatorPluginTitleState> _titleState = std::make_shared<GocatorPluginTitleState>();
 };
 
-class GocatorPlugin final : public QObject, public IDeviceRuntime, public IDeviceOperationalDiagnostics {
+class GocatorPlugin final : public QObject, public IDeviceRuntime, public IDeviceOperationalDiagnostics,
+                            public IDeviceRangeDiagnostics {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID PlaygroundDeviceRuntime_iid)
-    Q_INTERFACES(IDeviceRuntime IDeviceOperationalDiagnostics)
+    Q_INTERFACES(IDeviceRuntime IDeviceOperationalDiagnostics IDeviceRangeDiagnostics)
 
 public:
     void setOperationalDiagnosticSink(DeviceOperationalDiagnosticSink sink) noexcept override
     {
         _operationalSink.store(sink, std::memory_order_release);
+    }
+    void setRangeRejectionSink(DeviceRangeRejectionSink sink) noexcept override
+    {
+        _rangeRejectionSink.store(sink, std::memory_order_release);
     }
 
     DevicePluginDescriptor descriptor() const override
@@ -174,7 +180,8 @@ public:
                 std::lock_guard<std::mutex> lock(_devicesMutex);
                 devices = _devices;
             }
-            return std::make_unique<GocatorPluginSession>(std::move(gocator), std::move(devices));
+            return std::make_unique<GocatorPluginSession>(
+                std::move(gocator), std::move(devices), _rangeRejectionSink.load(std::memory_order_acquire));
         } catch (const std::exception& error) {
             if (errorMessage) *errorMessage = QString::fromLocal8Bit(error.what());
             return {};
@@ -183,6 +190,7 @@ public:
 
 private:
     std::atomic<DeviceOperationalDiagnosticSink> _operationalSink{nullptr};
+    std::atomic<DeviceRangeRejectionSink> _rangeRejectionSink{nullptr};
     mutable std::mutex _devicesMutex;
     std::vector<Gocator::DeviceInfo> _devices;
 };

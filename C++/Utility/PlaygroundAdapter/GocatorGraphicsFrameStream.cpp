@@ -28,7 +28,7 @@ namespace {
 class GocatorGraphicsFrameStream::Impl final
 {
 public:
-    Impl(Gocator* gocator, GraphicsFrameCallback callback);
+    Impl(Gocator* gocator, GraphicsFrameCallback callback, RejectedRange rejectedRange);
     ~Impl();
 
     Impl(const Impl&) = delete;
@@ -49,7 +49,8 @@ private:
 
 GocatorGraphicsFrameStream::Impl::Impl(
     Gocator* gocator,
-    GraphicsFrameCallback callback)
+    GraphicsFrameCallback callback,
+    RejectedRange rejectedRange)
     : _gocator(gocator), _callback(std::move(callback))
 {
     if (!_gocator || !_callback)
@@ -59,12 +60,18 @@ GocatorGraphicsFrameStream::Impl::Impl(
 
     const auto callbackToken = _callbackGate.token();
     _grabCallbackId = _gocator->registerGrabCallback(
-        [this, callbackToken](const GoPxLSdk::GoDataSet& dataSet, const std::size_t sequence) {
+        [this, callbackToken, rejectedRange = std::move(rejectedRange)](
+            const GoPxLSdk::GoDataSet& dataSet, const std::size_t sequence) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
             if (!lease) return;
             try
             {
-                auto frame = _adapter.convertFrame(dataSet, gocatorGraphicsFrameRequest());
+                GocatorRangeRejection rejection;
+                auto frame = rejectedRange
+                    ? _adapter.convertFrameWithRejection(dataSet, gocatorGraphicsFrameRequest(), rejection)
+                    : _adapter.convertFrame(dataSet, gocatorGraphicsFrameRequest());
+                if (rejection.reason != GocatorRangeRejection::Reason::None)
+                    rejectedRange(rejection, sequence);
                 if (frame.has_value())
                 {
                     frame->metadata.frameIndex = sequence;
@@ -95,8 +102,9 @@ GocatorGraphicsFrameStream::Impl::~Impl()
 
 GocatorGraphicsFrameStream::GocatorGraphicsFrameStream(
     Gocator* gocator,
-    GraphicsFrameCallback callback)
-    : _impl(std::make_unique<Impl>(gocator, std::move(callback)))
+    GraphicsFrameCallback callback,
+    RejectedRange rejectedRange)
+    : _impl(std::make_unique<Impl>(gocator, std::move(callback), std::move(rejectedRange)))
 {
 }
 

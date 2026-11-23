@@ -210,29 +210,61 @@ void writeArray2Intensity(const kArray2 intensities,
     return result;
 }
 
+using RangeReason = GocatorRangeRejection::Reason;
+
+std::nullopt_t rejectRange(GocatorRangeRejection* rejection, const RangeReason reason,
+                           const int width, const int height)
+{
+    if (rejection) {
+        rejection->reason = reason;
+        rejection->width = static_cast<std::uint32_t>(width);
+        rejection->height = static_cast<std::uint32_t>(height);
+    }
+    return std::nullopt;
+}
+
+std::nullopt_t rejectRangeStorage(GocatorRangeRejection* rejection, const GraphicsRangeFrameWriter& writer,
+                                  const int width, const int height)
+{
+    if (!rejection) return std::nullopt;
+    rejection->requestedStorageBytes = writer.blockBytes();
+    switch (writer.failure()) {
+    case GraphicsRangeFrameWriterFailure::InvalidDimensions:
+        return rejectRange(rejection, RangeReason::InvalidDimensions, width, height);
+    case GraphicsRangeFrameWriterFailure::SizeLimitExceeded:
+        return rejectRange(rejection, RangeReason::SizeLimitExceeded, width, height);
+    case GraphicsRangeFrameWriterFailure::StorageRefused:
+        return rejectRange(rejection, RangeReason::StorageRefused, width, height);
+    case GraphicsRangeFrameWriterFailure::MisalignedStorage:
+        return rejectRange(rejection, RangeReason::StorageMisaligned, width, height);
+    case GraphicsRangeFrameWriterFailure::None:
+        return rejectRange(rejection, RangeReason::InvalidLayout, width, height);
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] std::optional<RangeFrame> convertUniformSurface(
     const GoPxLSdk::GoGdpSurfaceUniform& msg,
     const StampInfo& stamp,
     const GraphicsFrameRequest& request,
-    const GraphicsImageStorage& storage)
+    const GraphicsImageStorage& storage, GocatorRangeRejection* rejection)
 {
     const auto width = positiveInt(msg.Width());
     const auto height = positiveInt(msg.Length());
     if (!width.has_value() || !height.has_value())
     {
-        return std::nullopt;
+        return rejectRange(rejection, RangeReason::InvalidDimensions, width.value_or(0), height.value_or(0));
     }
 
     const auto count = pixelCount(*width, *height);
     const kArray2 ranges = msg.Ranges();
-    if (!count.has_value()
-        || ranges == kNULL
-        || kArray2_ItemSize(ranges) != sizeof(k16s)
-        || kArray2_Length(ranges, 0) < static_cast<kSize>(*height)
+    if (!count) return rejectRange(rejection, RangeReason::SizeLimitExceeded, *width, *height);
+    if (ranges == kNULL) return rejectRange(rejection, RangeReason::MissingData, *width, *height);
+    if (kArray2_ItemSize(ranges) != sizeof(k16s))
+        return rejectRange(rejection, RangeReason::UnsupportedFormat, *width, *height);
+    if (kArray2_Length(ranges, 0) < static_cast<kSize>(*height)
         || kArray2_Length(ranges, 1) < static_cast<kSize>(*width))
-    {
-        return std::nullopt;
-    }
+        return rejectRange(rejection, RangeReason::TruncatedData, *width, *height);
 
     const auto* src = kArray2_DataT(ranges, k16s);
     const std::uint8_t intensityBits = request.includeRangeAuxiliaryChannels
@@ -247,7 +279,7 @@ void writeArray2Intensity(const kArray2 intensities,
     GraphicsRangeFrameWriter writer(layout, storage);
     if (!writer.isValid())
     {
-        return std::nullopt;
+        return rejectRangeStorage(rejection, writer, *width, *height);
     }
 
     const kPoint3d64f resolution = msg.Resolution();
@@ -266,31 +298,31 @@ void writeArray2Intensity(const kArray2 intensities,
         frame.intensityBits = intensityBits;
         frame.intensityField.bitsPerSample = intensityBits;
     }
-    return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
+    if (!frame.isValid()) return rejectRange(rejection, RangeReason::InvalidLayout, *width, *height);
+    return frame;
 }
 [[nodiscard]] std::optional<RangeFrame> convertSurfacePointCloud(
     const GoPxLSdk::GoGdpSurfacePointCloud& msg,
     const StampInfo& stamp,
     const GraphicsFrameRequest& request,
-    const GraphicsImageStorage& storage)
+    const GraphicsImageStorage& storage, GocatorRangeRejection* rejection)
 {
     const auto width = positiveInt(msg.Width());
     const auto height = positiveInt(msg.Length());
     if (!width.has_value() || !height.has_value())
     {
-        return std::nullopt;
+        return rejectRange(rejection, RangeReason::InvalidDimensions, width.value_or(0), height.value_or(0));
     }
 
     const auto count = pixelCount(*width, *height);
     const kArray2 ranges = msg.Ranges();
-    if (!count.has_value()
-        || ranges == kNULL
-        || kArray2_ItemSize(ranges) != sizeof(kPoint3d16s)
-        || kArray2_Length(ranges, 0) < static_cast<kSize>(*height)
+    if (!count) return rejectRange(rejection, RangeReason::SizeLimitExceeded, *width, *height);
+    if (ranges == kNULL) return rejectRange(rejection, RangeReason::MissingData, *width, *height);
+    if (kArray2_ItemSize(ranges) != sizeof(kPoint3d16s))
+        return rejectRange(rejection, RangeReason::UnsupportedFormat, *width, *height);
+    if (kArray2_Length(ranges, 0) < static_cast<kSize>(*height)
         || kArray2_Length(ranges, 1) < static_cast<kSize>(*width))
-    {
-        return std::nullopt;
-    }
+        return rejectRange(rejection, RangeReason::TruncatedData, *width, *height);
 
     const auto* src = reinterpret_cast<const std::int16_t*>(kArray2_DataT(ranges, kPoint3d16s));
     const std::uint8_t intensityBits = request.includeRangeAuxiliaryChannels
@@ -307,7 +339,7 @@ void writeArray2Intensity(const kArray2 intensities,
     GraphicsRangeFrameWriter writer(layout, storage);
     if (!writer.isValid())
     {
-        return std::nullopt;
+        return rejectRangeStorage(rejection, writer, *width, *height);
     }
 
     const kPoint3d64f resolution = msg.Resolution();
@@ -329,26 +361,28 @@ void writeArray2Intensity(const kArray2 intensities,
         frame.intensityBits = intensityBits;
         frame.intensityField.bitsPerSample = intensityBits;
     }
-    return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
+    if (!frame.isValid()) return rejectRange(rejection, RangeReason::InvalidLayout, *width, *height);
+    return frame;
 }
 [[nodiscard]] std::optional<RangeFrame> convertUniformProfile(
     const GoPxLSdk::GoGdpProfileUniform& msg,
     const StampInfo& stamp,
     const GraphicsFrameRequest& request,
-    const GraphicsImageStorage& storage)
+    const GraphicsImageStorage& storage, GocatorRangeRejection* rejection)
 {
     const auto width = positiveInt(msg.Width());
     if (!width.has_value())
     {
-        return std::nullopt;
+        return rejectRange(rejection, RangeReason::InvalidDimensions, 0, 1);
     }
 
     const std::size_t count = static_cast<std::size_t>(*width);
     const kArray1 ranges = msg.Ranges();
-    if (ranges == kNULL || kArray1_ItemSize(ranges) != sizeof(k16s) || kArray1_Length(ranges) < count)
-    {
-        return std::nullopt;
-    }
+    if (ranges == kNULL) return rejectRange(rejection, RangeReason::MissingData, *width, 1);
+    if (kArray1_ItemSize(ranges) != sizeof(k16s))
+        return rejectRange(rejection, RangeReason::UnsupportedFormat, *width, 1);
+    if (kArray1_Length(ranges) < count)
+        return rejectRange(rejection, RangeReason::TruncatedData, *width, 1);
 
     const auto* src = kArray1_DataT(ranges, k16s);
     const std::uint8_t intensityBits = request.includeRangeAuxiliaryChannels
@@ -363,7 +397,7 @@ void writeArray2Intensity(const kArray2 intensities,
     GraphicsRangeFrameWriter writer(layout, storage);
     if (!writer.isValid())
     {
-        return std::nullopt;
+        return rejectRangeStorage(rejection, writer, *width, 1);
     }
 
     const kPoint3d64f resolution = msg.Resolution();
@@ -383,26 +417,28 @@ void writeArray2Intensity(const kArray2 intensities,
         frame.intensityBits = intensityBits;
         frame.intensityField.bitsPerSample = intensityBits;
     }
-    return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
+    if (!frame.isValid()) return rejectRange(rejection, RangeReason::InvalidLayout, *width, 1);
+    return frame;
 }
 [[nodiscard]] std::optional<RangeFrame> convertProfilePointCloud(
     const GoPxLSdk::GoGdpProfilePointCloud& msg,
     const StampInfo& stamp,
     const GraphicsFrameRequest& request,
-    const GraphicsImageStorage& storage)
+    const GraphicsImageStorage& storage, GocatorRangeRejection* rejection)
 {
     const auto width = positiveInt(msg.Width());
     if (!width.has_value())
     {
-        return std::nullopt;
+        return rejectRange(rejection, RangeReason::InvalidDimensions, 0, 1);
     }
 
     const std::size_t count = static_cast<std::size_t>(*width);
     const kArray1 ranges = msg.Ranges();
-    if (ranges == kNULL || kArray1_ItemSize(ranges) != sizeof(kPoint16s) || kArray1_Length(ranges) < count)
-    {
-        return std::nullopt;
-    }
+    if (ranges == kNULL) return rejectRange(rejection, RangeReason::MissingData, *width, 1);
+    if (kArray1_ItemSize(ranges) != sizeof(kPoint16s))
+        return rejectRange(rejection, RangeReason::UnsupportedFormat, *width, 1);
+    if (kArray1_Length(ranges) < count)
+        return rejectRange(rejection, RangeReason::TruncatedData, *width, 1);
 
     const auto* src = reinterpret_cast<const std::int16_t*>(kArray1_DataT(ranges, kPoint16s));
     const std::uint8_t intensityBits = request.includeRangeAuxiliaryChannels
@@ -419,7 +455,7 @@ void writeArray2Intensity(const kArray2 intensities,
     GraphicsRangeFrameWriter writer(layout, storage);
     if (!writer.isValid())
     {
-        return std::nullopt;
+        return rejectRangeStorage(rejection, writer, *width, 1);
     }
 
     const kPoint3d64f resolution = msg.Resolution();
@@ -441,7 +477,8 @@ void writeArray2Intensity(const kArray2 intensities,
         frame.intensityBits = intensityBits;
         frame.intensityField.bitsPerSample = intensityBits;
     }
-    return frame.isValid() ? std::optional<RangeFrame>(std::move(frame)) : std::nullopt;
+    if (!frame.isValid()) return rejectRange(rejection, RangeReason::InvalidLayout, *width, 1);
+    return frame;
 }
 
 } // namespace
@@ -452,9 +489,21 @@ void GocatorDataSetGraphicsFrameAdapter::setFrameStorage(GraphicsImageStorage st
     _storage = std::move(storage);
 }
 
+std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertFrameWithRejection(
+    const GoPxLSdk::GoDataSet& dataSet, const GraphicsFrameRequest& request,
+    GocatorRangeRejection& rejection) const
+{
+    rejection = {};
+    auto frame = convertGraphicsFrame(dataSet, request, &rejection);
+    if (!frame || !frame->isValid()) return std::nullopt;
+    rejection.rangeRetained = true;
+    return frame;
+}
+
 std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphicsFrame(
     const GoPxLSdk::GoDataSet& dataSet,
-    const GraphicsFrameRequest& request) const
+    const GraphicsFrameRequest& request,
+    GocatorRangeRejection* rejection) const
 {
     if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range))
     {
@@ -468,38 +517,48 @@ std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphics
     }
 
     const StampInfo stamp = readStamp(dataSet);
-    for (std::size_t index = 0; index < dataSet.Count(); ++index)
+    const auto count = dataSet.Count();
+    if (rejection) {
+        rejection->partCount = static_cast<std::uint32_t>(
+            (std::min)(count, static_cast<decltype(count)>((std::numeric_limits<std::uint32_t>::max)())));
+    }
+    for (std::size_t index = 0; index < count; ++index)
     {
         const GoPxLSdk::GoGdpMsg& msg = dataSet.GdpMsgAt(index);
         std::optional<RangeFrame> frame;
+        auto* evidence = rejection && rejection->reason == RangeReason::None ? rejection : nullptr;
 
         switch (msg.Type())
         {
         case GoPxLSdk::MessageType::UNIFORM_SURFACE:
-            frame = convertUniformSurface(static_cast<const GoPxLSdk::GoGdpSurfaceUniform&>(msg), stamp, request, storage);
+            frame = convertUniformSurface(static_cast<const GoPxLSdk::GoGdpSurfaceUniform&>(msg), stamp, request, storage, evidence);
             break;
 
         case GoPxLSdk::MessageType::SURFACE_POINT_CLOUD:
-            frame = convertSurfacePointCloud(static_cast<const GoPxLSdk::GoGdpSurfacePointCloud&>(msg), stamp, request, storage);
+            frame = convertSurfacePointCloud(static_cast<const GoPxLSdk::GoGdpSurfacePointCloud&>(msg), stamp, request, storage, evidence);
             break;
 
         case GoPxLSdk::MessageType::UNIFORM_PROFILE:
-            frame = convertUniformProfile(static_cast<const GoPxLSdk::GoGdpProfileUniform&>(msg), stamp, request, storage);
+            frame = convertUniformProfile(static_cast<const GoPxLSdk::GoGdpProfileUniform&>(msg), stamp, request, storage, evidence);
             break;
 
         case GoPxLSdk::MessageType::PROFILE_POINT_CLOUD:
-            frame = convertProfilePointCloud(static_cast<const GoPxLSdk::GoGdpProfilePointCloud&>(msg), stamp, request, storage);
+            frame = convertProfilePointCloud(static_cast<const GoPxLSdk::GoGdpProfilePointCloud&>(msg), stamp, request, storage, evidence);
             break;
 
         default:
             break;
         }
 
+        if (evidence && evidence->reason != RangeReason::None && index < evidence->partCount)
+            evidence->part = static_cast<std::uint32_t>(index);
         if (frame.has_value())
         {
             return makeFrame(std::move(*frame), msg, stamp);
         }
     }
 
+    if (rejection && rejection->reason == RangeReason::None)
+        rejection->reason = RangeReason::MissingRange;
     return std::nullopt;
 }

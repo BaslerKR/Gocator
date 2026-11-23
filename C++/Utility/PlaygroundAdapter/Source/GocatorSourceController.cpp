@@ -7,6 +7,7 @@
 #include "engine/GraphicsFrame.h"
 #include "DeviceRuntime/Contract/SessionFrame.h"
 #include "Utility/PlaygroundAdapter/GocatorGraphicsFrameStream.h"
+#include "Utility/PlaygroundAdapter/GocatorDataSetGraphicsFrameAdapter.h"
 
 namespace {
 
@@ -47,12 +48,13 @@ void completeConnection(const Callback& callback, Value value)
 
 } // namespace
 
-GocatorSourceController::GocatorSourceController(Gocator* gocator, QObject* parent)
+GocatorSourceController::GocatorSourceController(Gocator* gocator, QObject* parent,
+                                                 DeviceRangeRejectionSink rangeRejectionSink)
     : AbstractSourceController(parent),
       _notifications([this](const std::string& connectionId, const std::string& subscriptionId) {
           return snapshotChange(connectionId, subscriptionId);
       }),
-      _gocator(gocator) {
+      _gocator(gocator), _rangeRejectionSink(rangeRejectionSink) {
     _parameterIdentity = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     _readSystem = [gocator] { return gocator->systemState(); };
     _writeQuickEdit = [gocator](bool enabled, std::optional<Gocator::SystemState> expected) {
@@ -163,6 +165,9 @@ bool GocatorSourceController::beginLive() {
 }
 
 bool GocatorSourceController::beginGrab(std::size_t frames) {
+    if (_rangeRejectionSink) {
+        for (auto& count : _rangeRejections) count.store(0, std::memory_order_relaxed);
+    }
     if (_lifecycle.grab) return _lifecycle.grab(frames);
     if (!_gocator) return false;
     if (_gocator->isGrabbing()) return false;
@@ -257,6 +262,12 @@ void GocatorSourceController::registerCallbacks() {
         }
     });
 
+    GocatorGraphicsFrameStream::RejectedRange rejectedRange;
+    if (_rangeRejectionSink) {
+        rejectedRange = [this](const GocatorRangeRejection& rejection, const std::size_t sequence) {
+            reportRangeRejection(rejection, sequence);
+        };
+    }
     _graphicsStream = std::make_unique<GocatorGraphicsFrameStream>(
         _gocator,
         [this](GraphicsFrame&& payload, const unsigned int sourceIndex) {
@@ -265,13 +276,45 @@ void GocatorSourceController::registerCallbacks() {
             frame.payload = std::move(payload);
             frame.frameSeq = _frameSeq.fetch_add(1, std::memory_order_relaxed);
             _frameConsumer(std::move(frame), sourceIndex);
-        });
+        }, std::move(rejectedRange));
     if (_frameStorage) _graphicsStream->setFrameStorage(frameStorageFunction(_frameStorage));
 
     // A single completes only after the producer delivered its one frame. Keep the observation
     // separate from the graphics stream so a conversion result cannot hide the delivery.
     _singleCallbackId = _gocator->registerGrabCallback(
         [this](const GoPxLSdk::GoDataSet&, std::size_t) { noteAcquisitionFrame(); });
+}
+
+void GocatorSourceController::reportRangeRejection(
+    const GocatorRangeRejection& rejection, const std::size_t frameSequence) noexcept
+{
+    using Reason = GocatorRangeRejection::Reason;
+    DeviceRangeRejectionObservation observation;
+    switch (rejection.reason) {
+    case Reason::None: return;
+    case Reason::MissingRange: observation.reason = DeviceRangeRejection::MissingRange; break;
+    case Reason::MissingData: observation.reason = DeviceRangeRejection::MissingData; break;
+    case Reason::InvalidDimensions: observation.reason = DeviceRangeRejection::InvalidDimensions; break;
+    case Reason::UnsupportedFormat: observation.reason = DeviceRangeRejection::UnsupportedFormat; break;
+    case Reason::TruncatedData: observation.reason = DeviceRangeRejection::TruncatedData; break;
+    case Reason::InvalidLayout: observation.reason = DeviceRangeRejection::InvalidLayout; break;
+    case Reason::SizeLimitExceeded: observation.reason = DeviceRangeRejection::SizeLimitExceeded; break;
+    case Reason::StorageRefused: observation.reason = DeviceRangeRejection::StorageRefused; break;
+    case Reason::StorageMisaligned: observation.reason = DeviceRangeRejection::StorageMisaligned; break;
+    }
+    if (!_singleInFlight.load(std::memory_order_relaxed)) {
+        auto& counter = _rangeRejections[static_cast<std::size_t>(observation.reason)];
+        const auto count = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count != 1 && count % 100 != 0) return;
+    }
+    observation.partCount = rejection.partCount;
+    observation.affectedPart = rejection.part;
+    observation.width = rejection.width;
+    observation.height = rejection.height;
+    observation.frameSequence = frameSequence;
+    observation.requestedStorageBytes = rejection.requestedStorageBytes;
+    observation.frameRetained = observation.rangeRetained = rejection.rangeRetained;
+    _rangeRejectionSink(observation);
 }
 
 void GocatorSourceController::deregisterCallbacks() {
