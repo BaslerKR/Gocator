@@ -1,6 +1,7 @@
 #include <QtTest/QtTest>
 #include "Utility/PlaygroundAdapter/Source/GocatorSourceController.h"
 #include "Utility/PlaygroundAdapter/Source/GocatorParameterNotifications.h"
+#include "Utility/PlaygroundAdapter/GocatorDataSetGraphicsFrameAdapter.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -13,6 +14,7 @@
 class GocatorParameterControlTests : public QObject {
     Q_OBJECT
 private slots:
+    void mapsAndSamplesRangeRejections();
     void sdkSystemWorkflow();
     void resourceTreeStructure();
     void resourceWriteUsesObservationsAndReadback();
@@ -115,6 +117,19 @@ struct ResourceFake {
 };
 
 struct GocatorParameterTestAccess {
+    static bool beginRangeRun(GocatorSourceController& controller, bool single)
+    {
+        controller._lifecycle.grab = [](std::size_t) { return true; };
+        controller._singleInFlight.store(single, std::memory_order_relaxed);
+        return controller.beginGrab(single ? 1U : 0U);
+    }
+
+    static void rejectRange(GocatorSourceController& controller, const GocatorRangeRejection& evidence,
+                            std::size_t sequence)
+    {
+        controller.reportRangeRejection(evidence, sequence);
+    }
+
     static void bind(GocatorSourceController& controller, ResourceFake& fake)
     {
         controller._systemConnected = [] { return true; };
@@ -857,6 +872,54 @@ void GocatorParameterControlTests::releaseStopsDelivery()
     QVERIFY(QTest::qWaitFor([&] { return deliveries.load() > afterRelease; }, 3000));
     QCOMPARE(controller.releaseParameterChanges(connection, "watch-2", [](auto) {}).error,
         DeviceParameterError::None);
+}
+
+void GocatorParameterControlTests::mapsAndSamplesRangeRejections()
+{
+    using Access = GocatorParameterTestAccess;
+    using Reason = GocatorRangeRejection::Reason;
+    static std::vector<DeviceRangeRejectionObservation> observations;
+    observations.clear();
+    GocatorSourceController controller(nullptr, nullptr,
+        +[](const DeviceRangeRejectionObservation& observation) noexcept {
+            try { observations.push_back(observation); } catch (...) {}
+        });
+    QVERIFY(Access::beginRangeRun(controller, false));
+    GocatorRangeRejection evidence;
+    evidence.reason = Reason::StorageRefused;
+    evidence.requestedStorageBytes = 127U;
+    for (std::size_t i = 1; i <= 101; ++i) Access::rejectRange(controller, evidence, i);
+    QCOMPARE(observations.size(), std::size_t{2});
+    QCOMPARE(observations[0].frameSequence, std::uint64_t{1});
+    QCOMPARE(observations[1].frameSequence, std::uint64_t{100});
+    QCOMPARE(observations.front().requestedStorageBytes, std::uint64_t{127});
+
+    QVERIFY(Access::beginRangeRun(controller, false));
+    Access::rejectRange(controller, evidence, 102U);
+    QCOMPARE(observations.size(), std::size_t{3});
+    QVERIFY(Access::beginRangeRun(controller, true));
+    Access::rejectRange(controller, evidence, 103U);
+    Access::rejectRange(controller, evidence, 104U);
+    QCOMPARE(observations.size(), std::size_t{5});
+
+    const std::pair<Reason, DeviceRangeRejection> mappings[] = {
+        {Reason::MissingRange, DeviceRangeRejection::MissingRange},
+        {Reason::MissingData, DeviceRangeRejection::MissingData},
+        {Reason::InvalidDimensions, DeviceRangeRejection::InvalidDimensions},
+        {Reason::UnsupportedFormat, DeviceRangeRejection::UnsupportedFormat},
+        {Reason::TruncatedData, DeviceRangeRejection::TruncatedData},
+        {Reason::InvalidLayout, DeviceRangeRejection::InvalidLayout},
+        {Reason::SizeLimitExceeded, DeviceRangeRejection::SizeLimitExceeded},
+        {Reason::StorageRefused, DeviceRangeRejection::StorageRefused},
+        {Reason::StorageMisaligned, DeviceRangeRejection::StorageMisaligned},
+    };
+    for (const auto& [input, expected] : mappings) {
+        evidence.reason = input;
+        const auto before = observations.size();
+        Access::rejectRange(controller, evidence, 105U);
+        QCOMPARE(observations.size(), before + 1U);
+        QCOMPARE(observations.back().reason, expected);
+    }
 }
 
 QTEST_MAIN(GocatorParameterControlTests)
