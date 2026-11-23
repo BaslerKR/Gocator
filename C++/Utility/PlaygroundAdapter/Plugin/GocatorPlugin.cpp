@@ -10,6 +10,26 @@
 
 namespace {
 
+constexpr DeviceOperationalDiagnostic outputDiagnostic(gocator::OutputPreparationFailure stage) noexcept
+{
+    switch (stage) {
+    case gocator::OutputPreparationFailure::Preparation:
+        return DeviceOperationalDiagnostic::AcquisitionOutputPreparationFailed;
+    case gocator::OutputPreparationFailure::Enable:
+        return DeviceOperationalDiagnostic::AcquisitionOutputEnableFailed;
+    case gocator::OutputPreparationFailure::Registration:
+        return DeviceOperationalDiagnostic::AcquisitionOutputRegistrationFailed;
+    }
+    return DeviceOperationalDiagnostic::AcquisitionOutputRegistrationFailed;
+}
+
+static_assert(outputDiagnostic(gocator::OutputPreparationFailure::Preparation)
+              == DeviceOperationalDiagnostic::AcquisitionOutputPreparationFailed);
+static_assert(outputDiagnostic(gocator::OutputPreparationFailure::Enable)
+              == DeviceOperationalDiagnostic::AcquisitionOutputEnableFailed);
+static_assert(outputDiagnostic(gocator::OutputPreparationFailure::Registration)
+              == DeviceOperationalDiagnostic::AcquisitionOutputRegistrationFailed);
+
 class GocatorPluginTitleState final {
 public:
     QString title() const
@@ -146,12 +166,7 @@ public:
             const auto sink = _operationalSink.load(std::memory_order_acquire);
             std::function<void(gocator::OutputPreparationFailure)> observer;
             if (sink) observer = [sink](gocator::OutputPreparationFailure stage) noexcept {
-                const auto code = stage == gocator::OutputPreparationFailure::Preparation
-                    ? DeviceOperationalDiagnostic::AcquisitionOutputPreparationFailed
-                    : stage == gocator::OutputPreparationFailure::Enable
-                        ? DeviceOperationalDiagnostic::AcquisitionOutputEnableFailed
-                        : DeviceOperationalDiagnostic::AcquisitionOutputRegistrationFailed;
-                sink(code);
+                sink(outputDiagnostic(stage));
             };
             auto gocator = std::make_unique<Gocator>(std::move(observer));
             std::vector<Gocator::DeviceInfo> devices;

@@ -9,7 +9,7 @@ class GocatorOutputPreparationTests final : public QObject {
 private slots:
     void stageFailuresAndContinuation_data();
     void stageFailuresAndContinuation();
-    void toleratedFailures();
+    void removeFailureIsTolerated();
 };
 
 void GocatorOutputPreparationTests::stageFailuresAndContinuation_data()
@@ -42,12 +42,12 @@ void GocatorOutputPreparationTests::stageFailuresAndContinuation()
     if (failure >= 0) QCOMPARE(int(observations.front()), failure);
 }
 
-void GocatorOutputPreparationTests::toleratedFailures()
+void GocatorOutputPreparationTests::removeFailureIsTolerated()
 {
     int observed = 0;
     bool registered = false;
     gocator::prepareOutput(
-        [] { try { throw std::runtime_error("unsupported scan mode"); } catch (...) {} },
+        [] {},
         [] {}, [] { throw std::runtime_error("remove failed"); },
         [&] { registered = true; }, [&](auto) { ++observed; });
     QVERIFY(registered);
