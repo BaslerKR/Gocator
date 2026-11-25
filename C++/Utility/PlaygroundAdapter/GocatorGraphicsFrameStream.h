@@ -16,6 +16,8 @@ struct GocatorRangeRejection;
 struct GocatorImageRejection;
 
 /** Owns Gocator SDK callback registration and emits only owned GraphicsFrame values. */
+class IFrameStorageProvider;
+
 class GocatorGraphicsFrameStream final
 {
 public:
@@ -29,7 +31,7 @@ public:
     GocatorGraphicsFrameStream& operator=(const GocatorGraphicsFrameStream&) = delete;
 
     /** Forwards the storage range samples are written into; callable while grabbing. */
-    void setFrameStorage(GraphicsImageStorage storage);
+    void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider);
 
 private:
     class Impl;

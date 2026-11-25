@@ -33,9 +33,9 @@ public:
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
 
-    void setFrameStorage(GraphicsImageStorage storage)
+    void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider)
     {
-        _adapter.setFrameStorage(std::move(storage));
+        _adapter.setFrameStorageProvider(std::move(provider));
     }
 
 private:
@@ -117,7 +117,7 @@ GocatorGraphicsFrameStream::GocatorGraphicsFrameStream(
 
 GocatorGraphicsFrameStream::~GocatorGraphicsFrameStream() = default;
 
-void GocatorGraphicsFrameStream::setFrameStorage(GraphicsImageStorage storage)
+void GocatorGraphicsFrameStream::setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider)
 {
-    if (_impl) _impl->setFrameStorage(std::move(storage));
+    if (_impl) _impl->setFrameStorageProvider(std::move(provider));
 }

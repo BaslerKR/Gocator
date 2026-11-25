@@ -1,12 +1,14 @@
 ## Unreleased
 
+- Plan a Gocator frame's range and image as one frame-storage request through the Playground `IFrameStorageProvider::acquireFrame()` contract, so a frame with both components is written once into one worker slot and published in place with a single admission. The adapter requires `Playground::DeviceRuntimeContract` and the frame-storage interface version 2.0.
+
 - Complete Single only after the adapter hands off a usable frame and acquisition stops. Preserve Stop failures in the command result and release the local connection on Disconnect even when device Stop fails. Bind automatic finite-grab stops to their own acquisition.
 
 - Reject surface arrays that disagree with the declared grid and omit mismatched auxiliary intensity. Report the full required image extent for short rows and store only declared image rows.
 
 - Convert Gocator GDP image-only replay messages into owned GraphicsImage payloads for common Mono, Bayer, RGB/BGR and RGBA/BGRA formats, preserve word-aligned source bit widths, and report image rejection evidence through the device image diagnostics contract. GEV 12-packed layouts that differ from PFNC are refused rather than misdecoded.
 
-- Support GoPxL PC and Emulator replay jobs without scan engines by selecting one authoritative GDP output, preferring profile range sources, falling back to surface range sources, and using an image source only when no range source exists. Datasets with any range candidate publish range-only, and a damaged range candidate suppresses image fallback; simultaneous image/range publication is tracked in Playground issue #654.
+- Support GoPxL PC and Emulator replay jobs without scan engines by selecting one authoritative GDP output, preferring profile range sources, falling back to surface range sources, and using an image source only when no range source exists. A dataset with a usable range candidate publishes the range together with the first valid image in one frame whose components share a single planned frame-storage lease and are published in place. A dataset whose image is invalid publishes range-only and still reports the image rejection, a damaged range candidate suppresses image fallback, and an image-only dataset publishes the image alone. A refused storage plan drops the whole frame once, without retrying component by component.
 
 - Encode non-default control ports in connection target IDs, keep same-address PC instances and Emulators distinct, refuse ambiguous port-less targets, and list only local discovery entries with an address, usable control and GDP ports, and no address conflict. Log every reported device.
 

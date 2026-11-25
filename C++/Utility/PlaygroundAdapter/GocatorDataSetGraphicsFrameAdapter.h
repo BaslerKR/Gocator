@@ -14,6 +14,8 @@
 #include <optional>
 #include <limits>
 
+class IFrameStorageProvider;
+
 namespace GoPxLSdk
 {
 class GoDataSet;
@@ -63,8 +65,14 @@ public:
         const GoPxLSdk::GoDataSet& dataSet, const GraphicsFrameRequest& request,
         GocatorRangeRejection& rejection, GocatorImageRejection* imageRejection = nullptr) const;
 
-    /** Sets where range samples are written; empty restores storage of the adapter's own. */
-    void setFrameStorage(GraphicsImageStorage storage);
+    /**
+     * @brief Sets the provider that leases one slot for every stored component of a frame.
+     *
+     * A frame with a range and a valid image asks the provider once and writes both at the planned
+     * offsets of that single lease. A refused plan drops the frame; the adapter never retries
+     * component by component. A null provider restores ordinary per-component allocation.
+     */
+    void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider);
 
 private:
     friend class GraphicsFrameAdapter<GocatorDataSetGraphicsFrameAdapter, GoPxLSdk::GoDataSet>;
@@ -76,5 +84,5 @@ private:
         GocatorImageRejection* imageRejection = nullptr) const;
 
     mutable std::mutex _storageMutex;
-    GraphicsImageStorage _storage;
+    std::shared_ptr<IFrameStorageProvider> _provider;
 };

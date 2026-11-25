@@ -280,7 +280,7 @@ void GocatorSourceController::setFrameConsumer(FrameConsumer consumer) {
 
 void GocatorSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider) {
     _frameStorage = std::move(provider);
-    if (_graphicsStream) _graphicsStream->setFrameStorage(frameStorageFunction(_frameStorage));
+    if (_graphicsStream) _graphicsStream->setFrameStorageProvider(_frameStorage);
 }
 
 void GocatorSourceController::registerCallbacks() {
@@ -334,7 +334,7 @@ void GocatorSourceController::registerCallbacks() {
             _frameConsumer(std::move(frame), sourceIndex);
             noteAcquisitionFrame();
         }, std::move(rejectedRange), std::move(rejectedImage));
-    if (_frameStorage) _graphicsStream->setFrameStorage(frameStorageFunction(_frameStorage));
+    if (_frameStorage) _graphicsStream->setFrameStorageProvider(_frameStorage);
 }
 
 void GocatorSourceController::reportRangeRejection(
