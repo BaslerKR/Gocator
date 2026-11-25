@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cctype>
+#include <condition_variable>
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
@@ -14,12 +15,15 @@
 #include <unordered_map>
 #include <vector>
 
-#include "Internal/GocatorConnection.h"
-#include "Internal/GocatorOutputPreparation.h"
 #include "GocatorDiscoveryDiagnostics.h"
 #include "GrabCallbackState.h"
+#include "Internal/GocatorConnection.h"
+#include "Internal/GocatorDataSource.h"
 #include "Internal/GocatorDiscovery.h"
+#include "Internal/GocatorOutputPreparation.h"
+#include "Internal/GocatorOutputRequest.h"
 #include "Internal/GocatorResourceClient.h"
+#include "Internal/GocatorSelection.h"
 
 namespace
 {
@@ -59,12 +63,14 @@ constexpr const char* EXPOSURE_PARAMETER_PATH = "/parameters/exposureSettings/si
     return summary;
 }
 
-[[nodiscard]] gocator::GocatorConnectionConfig resolveTarget(const std::string& ipAddress)
+[[nodiscard]] gocator::GocatorConnectionConfig resolveTarget(
+    const gocator::GocatorTargetEndpoint& endpoint)
 {
-    if (!ipAddress.empty())
+    if (!endpoint.address.empty())
     {
-        Gocator::syslog("Using manual Gocator target: " + ipAddress + ".");
-        return gocator::GocatorDiscovery::manualTarget(ipAddress);
+        Gocator::syslog("Using manual Gocator target: " + endpoint.address
+            + " controlPort=" + std::to_string(endpoint.controlPort) + ".");
+        return gocator::GocatorDiscovery::manualTarget(endpoint.address, endpoint.controlPort);
     }
 
     Gocator::syslog("Resolving local Gocator target by discovery.");
@@ -81,21 +87,6 @@ constexpr const char* EXPOSURE_PARAMETER_PATH = "/parameters/exposureSettings/si
     }
 
     throw std::runtime_error("no local Gocator/GoPxL instance discovered");
-}
-
-[[nodiscard]] std::string detectEngineId(gocator::GocatorResourceClient& resources)
-{
-    try
-    {
-        GoPxLSdk::GoJson sensorsResponse = resources.read("/scan/visibleSensors/");
-        GoPxLSdk::GoJson sensors = sensorsResponse.At("/sensors");
-        if (sensors.Size() > 0U)
-        {
-            return sensors.At("/0/engineId").Get<std::string>();
-        }
-    }
-    catch (...) {}
-    return "LMIConfocalLineProfiler";
 }
 
 [[nodiscard]] std::string profileSourceForEngine(const std::string& engineId, Gocator::ScanMode mode)
@@ -169,6 +160,9 @@ struct Gocator::Impl
     std::unique_ptr<GoPxLSdk::GoGdpClient> gdpClient;
     std::atomic<bool> isOpened{false};
     std::atomic<bool> isGrabbing{false};
+    bool stopFailed = false;
+    std::string stopError;
+    std::mutex diagnosticsMutex;
     std::atomic<bool> stopRequested{false};
     std::atomic<bool> controlBusy{false};
     mutable std::mutex devicesMutex;
@@ -179,7 +173,9 @@ struct Gocator::Impl
     std::string getScannerPath() const
     {
         if (!resources) return "";
-        const std::string engineId = detectEngineId(*resources);
+        const auto detected = gocator::detectEngineId(
+            [&](const std::string& path) { return resources->read(path); });
+        const std::string engineId = detected.engineId.value_or("LMIConfocalLineProfiler");
         return "/scan/engines/" + engineId + "/scanners/scanner-0";
     }
 
@@ -207,13 +203,20 @@ struct Gocator::Impl
     std::mutex dataMutex;
     std::function<void(const GoPxLSdk::GoDataSet&)> dataCallback;
     std::mutex stopWorkerMutex;
+    std::condition_variable stopWorkerWake;
     std::thread stopWorker;
-    std::mutex stopMutex;
+    bool stopWorkerShutdown = false;
+    std::optional<std::uint64_t> pendingStop;
+    std::uint64_t acquisitionGeneration = 0;
 
     ~Impl()
     {
-        close();
-        joinStopWorker();
+        {
+            std::lock_guard<std::mutex> lock(stopWorkerMutex);
+            stopWorkerShutdown = true;
+        }
+        stopWorkerWake.notify_one();
+        if (stopWorker.joinable()) stopWorker.join();
     }
 
     void notifyStatus(Status status, bool on)
@@ -230,6 +233,8 @@ struct Gocator::Impl
 
         for (const auto& cb : callbacks)
         {
+            if (status == GrabbingStatus && on != isGrabbing.load()) break;
+            if (status == ConnectionStatus && on != isOpened.load()) break;
             if (!cb) continue;
             try
             {
@@ -249,7 +254,7 @@ struct Gocator::Impl
     bool open(const std::string& ip, std::string* error)
     {
         if (error) error->clear();
-        std::lock_guard<std::recursive_mutex> lock(controlMutex);
+        std::unique_lock<std::recursive_mutex> lock(controlMutex);
         if (isOpened.load())
         {
             Gocator::syslog("Open skipped: Gocator is already connected to " + ipAddress + ".");
@@ -259,7 +264,21 @@ struct Gocator::Impl
         try
         {
             Gocator::syslog("Try to open Gocator" + std::string(ip.empty() ? " by discovery." : " at " + ip + "."));
-            auto target = resolveTarget(ip);
+            auto endpoint = gocator::parseTargetId(ip);
+            if (!endpoint.explicitPort && !ip.empty()) {
+                std::vector<DeviceInfo> discovered;
+                {
+                    std::lock_guard<std::mutex> lock(devicesMutex);
+                    discovered = cachedDevices;
+                }
+                const auto cached = gocator::controlPortForTarget(discovered, endpoint.address);
+                if (cached.ambiguous)
+                    throw std::invalid_argument("Gocator target is ambiguous; specify address:port.");
+                endpoint.controlPort = cached.port;
+            }
+            auto target = resolveTarget(endpoint);
+            const std::string targetId = gocator::targetIdForEndpoint(
+                target.address, target.controlPort);
             Gocator::syslog("Resolved Gocator target: address=" + target.address
                 + " controlPort=" + std::to_string(target.controlPort)
                 + " timeoutMs=" + std::to_string(target.commandTimeoutMs) + ".");
@@ -271,64 +290,51 @@ struct Gocator::Impl
             ++connectionGeneration;
             {
                 std::lock_guard<std::mutex> snapshotLock(snapshotMutex);
-                snapshot = {true, connectionGeneration, ipAddress};
+                snapshot = {true, connectionGeneration, ipAddress, targetId};
             }
             isOpened.store(true);
             Gocator::syslog("Gocator connected: address=" + ipAddress
                 + " gdpPort=" + std::to_string(connection->gdpPort()) + ".");
-            notifyStatus(ConnectionStatus, true);
-            return true;
         }
         catch (const std::exception& e)
         {
             // Keep the SDK reason: an address that was not discovered may still be refused.
             if (error) *error = e.what();
             Gocator::syslog("Gocator open failed: " + std::string(e.what()), true);
-            close();
+            resources.reset();
+            connection.reset();
             return false;
         }
+        lock.unlock();
+        notifyStatus(ConnectionStatus, true);
+        return true;
     }
 
-    void close()
+    void close(const bool throwOnFailure = false)
     {
+        std::unique_lock<std::recursive_mutex> lock(controlMutex);
         const bool wasOpened = isOpened.load();
         if (wasOpened)
         {
             Gocator::syslog("Closing Gocator connection: address=" + ipAddress + ".");
         }
 
-        joinStopWorker();
-        stop();
-
-        if (gdpClient)
-        {
-            try { gdpClient->Close(); } catch (...) {}
-            gdpClient.reset();
-        }
-
-        std::lock_guard<std::recursive_mutex> controlLock(controlMutex);
+        auto stopped = stopAcquisition();
         resources.reset();
-        if (connection)
-        {
-            connection->disconnect();
-            connection.reset();
-        }
-
-        if (isOpened.load())
-        {
-            {
-                std::lock_guard<std::mutex> snapshotLock(snapshotMutex);
-                snapshot = {};
-            }
-            isOpened.store(false);
-            notifyStatus(ConnectionStatus, false);
-            Gocator::syslog("Gocator connection closed.");
-        }
-        else
+        connection.reset();
         {
             std::lock_guard<std::mutex> snapshotLock(snapshotMutex);
             snapshot = {};
         }
+        isOpened.store(false);
+        lock.unlock();
+
+        if (wasOpened)
+        {
+            notifyStatus(ConnectionStatus, false);
+            Gocator::syslog("Gocator connection closed.");
+        }
+        finishStop(stopped, throwOnFailure);
     }
 
     /** @brief Installs the control output the current scan mode needs before GDP reception starts.
@@ -336,40 +342,76 @@ struct Gocator::Impl
      *        settings through explicit parameter writes; this function only mirrors the mode the
      *        sensor currently reports so a grab can publish frames.
      */
-    void prepareOutputs()
+    void prepareOutputs(bool& mayHaveEffect)
     {
         if (!isOpened.load() || !resources) return;
 
+        const auto reportFailure = [this](gocator::OutputPreparationFailure stage) {
+            if (outputFailure) {
+                try { outputFailure(stage); return; } catch (...) {}
+            }
+            const char* step = stage == gocator::OutputPreparationFailure::Preparation ? "preparation"
+                : stage == gocator::OutputPreparationFailure::Enable ? "enable" : "registration";
+            Gocator::syslog(std::string("Gocator acquisition output ") + step + " failed.", true);
+        };
+
         std::string engineId;
-        ScanMode mode = ScanMode::ProfileMode;
-        gocator::prepareOutput(
-            [&] {
-                engineId = detectEngineId(*resources);
+        std::string sourceId;
+        bool replaySource = false;
+        try {
+            ScanMode mode = ScanMode::ProfileMode;
+            const auto detectedEngine = gocator::detectEngineId(
+                [&](const std::string& path) { return resources->read(path); });
+            if (detectedEngine.failed)
+                throw std::runtime_error("Unable to determine the Gocator scan engine.");
+            if (detectedEngine.engineId) {
+                engineId = *detectedEngine.engineId;
                 const std::string scannerPath = "/scan/engines/" + engineId + "/scanners/scanner-0";
                 try {
-                    const auto data = resources->data(scannerPath);
-                    if (data.At("/parameters/scanModeSettings/scanMode").Get<int>() == 3)
-                        mode = ScanMode::SurfaceMode;
+                    const auto scannerData = resources->data(scannerPath);
+                    try {
+                        if (scannerData.At("/parameters/scanModeSettings/scanMode").Get<int>() == 3)
+                            mode = ScanMode::SurfaceMode;
+                    } catch (...) {
+                    }
                 } catch (...) {
-                    // A firmware variant without scanModeSettings keeps the profile output.
                 }
+                sourceId = profileSourceForEngine(engineId, mode);
+            } else {
+                const auto sources = gocator::replayDataSources(
+                    [&](const std::string& path) { return resources->read(path); });
+                if (const auto selected = gocator::selectReplayDataSource(sources)) {
+                    sourceId = *selected;
+                } else if (const auto image = gocator::selectReplayImageDataSource(sources)) {
+                    sourceId = *image;
+                } else {
+                    throw std::runtime_error("No Gocator scan engine or replay range/image source is available.");
+                }
+                replaySource = true;
+            }
+            if (connection->isRunning())
+                throw std::runtime_error("Gocator was started by another client during output preparation.");
+        } catch (...) {
+            reportFailure(gocator::OutputPreparationFailure::Preparation);
+            throw;
+        }
+
+        gocator::prepareOutput(
+            [] {},
+            [&] {
+                mayHaveEffect = true;
+                resources->update(GOCATOR_CONTROL_PATH, GoPxLSdk::GoJson(R"({"enabled": true})"));
             },
-            [&] { resources->update(GOCATOR_CONTROL_PATH, GoPxLSdk::GoJson(R"({"enabled": true})")); },
             [&] { resources->call(GOCATOR_REMOVE_ALL_OUTPUT_PATH, GoPxLSdk::GoJson("{}")); },
             [&] {
-                const std::string sourceId = profileSourceForEngine(engineId, mode);
-                std::string payload = R"({"source":")" + sourceId + R"(","outputId":0,"autoShift":true})";
-                resources->call(GOCATOR_ADD_OUTPUT_PATH, GoPxLSdk::GoJson(payload));
-                Gocator::syslog("Gocator acquisition output: engine=" + engineId + " source=" + sourceId + ".");
+                resources->call(GOCATOR_ADD_OUTPUT_PATH, gocator::outputRequest(sourceId, 0));
+                if (replaySource)
+                    Gocator::syslog("Gocator acquisition output: replay source=" + sourceId + ".");
+                else
+                    Gocator::syslog("Gocator acquisition output: engine=" + engineId
+                        + " source=" + sourceId + ".");
             },
-            [this](gocator::OutputPreparationFailure stage) {
-                if (outputFailure) {
-                    try { outputFailure(stage); return; } catch (...) {}
-                }
-                const char* step = stage == gocator::OutputPreparationFailure::Preparation ? "preparation"
-                    : stage == gocator::OutputPreparationFailure::Enable ? "enable" : "registration";
-                Gocator::syslog(std::string("Gocator acquisition output ") + step + " failed.", true);
-            });
+            reportFailure);
     }
 
     Gocator::ParameterWriteResult setParameterValue(ParameterTarget target, const std::string& path,
@@ -404,29 +446,38 @@ struct Gocator::Impl
         }
     }
 
-    void grab(size_t frames)
+    bool grab(size_t frames)
     {
-        joinStopWorker();
+        std::unique_lock<std::recursive_mutex> lock(controlMutex);
 
         if (!isOpened.load())
         {
             Gocator::syslog("Grab skipped: Gocator is not connected.", true);
-            return;
+            return false;
         }
 
         if (isGrabbing.load())
         {
             Gocator::syslog("Grab skipped: Gocator is already grabbing.");
-            return;
+            return false;
         }
 
+        Gocator::GrabFailure failure = Gocator::GrabFailure::OutputPreparation;
+        bool mayHaveEffect = false;
+        bool localStartConfirmed = false;
         try
         {
             Gocator::syslog("Starting Gocator grab: frames="
                 + std::string(frames == 0 ? "continuous" : std::to_string(frames)) + ".");
-            // Scan values are written explicitly by the caller before start; only the transport
-            // output the producer needs is prepared here.
-            prepareOutputs();
+            failure = Gocator::GrabFailure::StateUnknown;
+            const bool attachToRunning = connection->isRunning();
+            if (attachToRunning) {
+                Gocator::syslog("Attaching to an already-running Gocator system without changing outputs.");
+            } else {
+                failure = Gocator::GrabFailure::OutputPreparation;
+                prepareOutputs(mayHaveEffect);
+            }
+            failure = Gocator::GrabFailure::GdpConnect;
             gdpClient = std::make_unique<GoPxLSdk::GoGdpClient>();
             gdpClient->Connect(connection->system().Address(), connection->gdpPort());
             Gocator::syslog("Gocator GDP connected: gdpPort=" + std::to_string(connection->gdpPort()) + ".");
@@ -435,35 +486,95 @@ struct Gocator::Impl
             frameTarget = frames;
             callbackState.reset();
             stopRequested.store(false);
+            {
+                std::lock_guard<std::mutex> lock(diagnosticsMutex);
+                stopFailed = false;
+                stopError.clear();
+            }
             isGrabbing.store(true);
 
-            dataCallback = [this](const GoPxLSdk::GoDataSet& dataSet) {
-                handleData(dataSet);
+            const auto generation = ++acquisitionGeneration;
+            dataCallback = [this, generation](const GoPxLSdk::GoDataSet& dataSet) {
+                handleData(dataSet, generation);
             };
-            gdpClient->ReceiveDataAsync(dataCallback);
 
-            connection->start();
-            notifyStatus(GrabbingStatus, true);
-            Gocator::syslog("Gocator grabbing started.");
+            if (attachToRunning) {
+                failure = Gocator::GrabFailure::Attach;
+                connection->attachToRunning();
+            } else {
+                const auto started = connection->tryStart();
+                switch (started) {
+                case gocator::GocatorStartResult::Started:
+                    localStartConfirmed = true;
+                    mayHaveEffect = true;
+                    break;
+                case gocator::GocatorStartResult::AlreadyRunning:
+                    throw Gocator::GrabError(Gocator::GrabFailure::AlreadyRunning,
+                        "Gocator was started by another client during output preparation.", true);
+                case gocator::GocatorStartResult::StateUnknown:
+                    failure = Gocator::GrabFailure::StateUnknown;
+                    break;
+                case gocator::GocatorStartResult::StartUncertain:
+                    failure = Gocator::GrabFailure::StartUncertain;
+                    break;
+                case gocator::GocatorStartResult::PriorStopUncertain:
+                    failure = Gocator::GrabFailure::PriorStopUncertain;
+                    break;
+                case gocator::GocatorStartResult::Refused:
+                    failure = Gocator::GrabFailure::StartRefused;
+                    break;
+                }
+                if (!localStartConfirmed)
+                    throw Gocator::GrabError(failure, connection->lastOperationError().empty()
+                        ? "Gocator start could not be confirmed." : connection->lastOperationError(), true);
+            }
+            failure = Gocator::GrabFailure::ReceiveStart;
+            mayHaveEffect = true;
+            if (frames > 0 && !stopWorker.joinable())
+                stopWorker = std::thread([this] { runStopWorker(); });
+            gdpClient->ReceiveDataAsync(dataCallback);
         }
         catch (const std::exception& e)
         {
             Gocator::syslog("Gocator grab failed: " + std::string(e.what()), true);
-            stop();
+            auto stopped = stopAcquisition(localStartConfirmed);
+            lock.unlock();
+            finishStop(stopped, false);
+            if (dynamic_cast<const Gocator::GrabError*>(&e)) throw;
+            throw Gocator::GrabError(failure, e.what(), mayHaveEffect);
         }
+        lock.unlock();
+        notifyStatus(GrabbingStatus, true);
+        if (isGrabbing.load()) Gocator::syslog("Gocator grabbing started.");
+        return true;
     }
 
-    void stop()
+    struct StopOutcome
     {
-        std::lock_guard<std::mutex> lock(stopMutex);
-        if (!isGrabbing.exchange(false)) return;
+        bool wasGrabbing;
+        std::string error;
+    };
 
-        Gocator::syslog("Stopping Gocator grab.");
+    // The caller holds controlMutex until the connection and GDP state are consistent.
+    StopOutcome stopAcquisition(const bool stopSystem = true)
+    {
+        StopOutcome outcome{isGrabbing.exchange(false), {}};
         stopRequested.store(true);
 
-        if (connection)
+        if (connection && stopSystem)
         {
-            connection->stopNoThrow();
+            const auto stopped = connection->tryStop();
+            if (stopped == gocator::GocatorStopResult::Refused
+                || stopped == gocator::GocatorStopResult::Uncertain) {
+                outcome.error = connection->lastOperationError();
+                if (outcome.error.empty()) outcome.error = "Gocator stop could not be confirmed.";
+                {
+                    std::lock_guard<std::mutex> diagnosticsLock(diagnosticsMutex);
+                    stopError = outcome.error;
+                    stopFailed = true;
+                }
+                Gocator::syslog("Gocator stop failed: " + outcome.error, true);
+            }
         }
 
         if (gdpClient)
@@ -472,19 +583,34 @@ struct Gocator::Impl
             gdpClient.reset();
         }
 
-        // Close has stopped reception; serialize with the last admitted callback.
-        std::lock_guard<std::mutex> dataLock(dataMutex);
-        dataCallback = {};
-        Gocator::syslog("Gocator diagnostics: delivered=" + std::to_string(callbackState.deliveredFrames())
-            + " failed=" + std::to_string(callbackState.failedCallbacks()) + ".");
-        notifyStatus(GrabbingStatus, false);
-        Gocator::syslog("Gocator grabbing stopped.");
+        {
+            std::lock_guard<std::mutex> dataLock(dataMutex);
+            dataCallback = {};
+        }
+        if (outcome.wasGrabbing)
+            Gocator::syslog("Gocator diagnostics: delivered=" + std::to_string(callbackState.deliveredFrames())
+                + " failed=" + std::to_string(callbackState.failedCallbacks()) + ".");
+        return outcome;
     }
 
-    void handleData(const GoPxLSdk::GoDataSet& dataSet)
+    void finishStop(const StopOutcome& outcome, const bool throwOnFailure)
+    {
+        if (outcome.wasGrabbing) notifyStatus(GrabbingStatus, false);
+        if (throwOnFailure && !outcome.error.empty()) throw std::runtime_error(outcome.error);
+    }
+
+    void stop(const bool throwOnFailure = false)
+    {
+        std::unique_lock<std::recursive_mutex> lock(controlMutex);
+        auto stopped = stopAcquisition();
+        lock.unlock();
+        finishStop(stopped, throwOnFailure);
+    }
+
+    void handleData(const GoPxLSdk::GoDataSet& dataSet, const std::uint64_t generation)
     {
         std::lock_guard<std::mutex> dataLock(dataMutex);
-        if (!isGrabbing.load()) return;
+        if (!isGrabbing.load() || stopRequested.load()) return;
 
         callbackState.beginFrame();
         {
@@ -524,41 +650,45 @@ struct Gocator::Impl
         if (frameTarget > 0 && frameSeq >= frameTarget)
         {
             Gocator::syslog("Gocator frame target reached: " + std::to_string(frameSeq) + " frame(s).");
-            requestStopFromCallback();
+            requestStopFromCallback(generation);
         }
     }
 
-    void requestStopFromCallback()
+    void requestStopFromCallback(const std::uint64_t generation)
     {
         if (stopRequested.exchange(true))
         {
             return;
         }
 
-        std::lock_guard<std::mutex> lock(stopWorkerMutex);
-        if (stopWorker.joinable())
-        {
-            return;
-        }
-
-        stopWorker = std::thread([this]() {
-            stop();
-        });
-    }
-
-    void joinStopWorker()
-    {
-        std::thread worker;
         {
             std::lock_guard<std::mutex> lock(stopWorkerMutex);
-            if (!stopWorker.joinable() || stopWorker.get_id() == std::this_thread::get_id())
-            {
-                return;
-            }
-            worker = std::move(stopWorker);
+            pendingStop = generation;
         }
+        stopWorkerWake.notify_one();
+    }
 
-        worker.join();
+    void runStopWorker()
+    {
+        std::unique_lock<std::mutex> workLock(stopWorkerMutex);
+        for (;;)
+        {
+            stopWorkerWake.wait(workLock, [this] { return stopWorkerShutdown || pendingStop; });
+            if (stopWorkerShutdown) return;
+            const auto generation = *pendingStop;
+            pendingStop.reset();
+            workLock.unlock();
+            {
+                std::unique_lock<std::recursive_mutex> lock(controlMutex);
+                if (isGrabbing.load() && generation == acquisitionGeneration)
+                {
+                    auto stopped = stopAcquisition();
+                    lock.unlock();
+                    finishStop(stopped, false);
+                }
+            }
+            workLock.lock();
+        }
     }
 };
 
@@ -572,10 +702,7 @@ Gocator::Gocator(std::function<void(gocator::OutputPreparationFailure)> outputFa
 
 Gocator::~Gocator()
 {
-    if (_impl)
-    {
-        _impl->close();
-    }
+    _impl->close();
     syslog("Gocator instance destroyed.");
 }
 
@@ -640,9 +767,9 @@ Gocator::ConnectionSnapshot Gocator::connectionSnapshot() const
     return _impl->snapshot;
 }
 
-void Gocator::close()
+void Gocator::close(const bool throwOnFailure)
 {
-    _impl->close();
+    _impl->close(throwOnFailure);
 }
 
 std::vector<Gocator::DeviceInfo> Gocator::cachedDevices() const
@@ -688,22 +815,15 @@ void Gocator::holdControlForTest(const std::function<void()>& entered, const std
     if (release) release();
 }
 
-bool Gocator::notifyGrabCallbackForTest(CallbackId id)
+void Gocator::receiveDataForTest(const GoPxLSdk::GoDataSet& dataSet)
 {
-    GrabCallback callback;
-    {
-        std::lock_guard<std::mutex> lock(_impl->grabCallbackMutex);
-        const auto found = _impl->grabCallbacks.find(id);
-        if (found == _impl->grabCallbacks.end()) return false;
-        callback = found->second;
-    }
-    GoPxLSdk::GoDataSet dataSet;
-    if (callback) callback(dataSet, 0);
-    return true;
+    _impl->handleData(dataSet, _impl->acquisitionGeneration);
 }
 
 void Gocator::notifyStatusForTest(Status status, bool on)
 {
+    if (status == GrabbingStatus) _impl->isGrabbing.store(on);
+    if (status == ConnectionStatus) _impl->isOpened.store(on);
     _impl->notifyStatus(status, on);
 }
 
@@ -733,8 +853,18 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices(std::string* error)
         }
         syslog("Gocator standard discovery found " + std::to_string(devices.size()) + " device(s).");
 
-        // If nothing found, try classic discovery for older G2/G3 sensors
-        if (devices.empty())
+        bool hasConnectableDevice = false;
+        for (const auto& device : devices)
+        {
+            if (device.canConnectLocally())
+            {
+                hasConnectableDevice = true;
+                break;
+            }
+        }
+
+        // If no usable device was found, try classic discovery for older G2/G3 sensors
+        if (!hasConnectableDevice)
         {
             syslog("Starting Gocator discovery: mode=classic timeoutMs=2000.");
             try
@@ -755,9 +885,11 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices(std::string* error)
         result.reserve(devices.size());
         for (const auto& d : devices)
         {
+            if (!d.canConnectLocally()) continue;
             syslog(deviceSummary(d));
             bool isVirt = (d.serialNumber == 0 || d.deviceModel.empty() || d.webPort == 8100);
-            result.push_back({d.address, d.deviceModel, std::to_string(d.serialNumber), isVirt});
+            result.push_back({d.address, d.deviceModel, std::to_string(d.serialNumber), isVirt,
+                d.controlPort});
         }
         syslog("Gocator discovery completed: " + std::to_string(result.size()) + " device(s) available.");
         setCachedDevices(result);
@@ -806,14 +938,14 @@ Gocator::ParameterWriteResult Gocator::setUniformSpacingEnabled(bool enable)
     return _impl->setParameterValue(ParameterTarget::Scanner, UNIFORM_SPACING_PARAMETER_PATH, enable ? "true" : "false");
 }
 
-void Gocator::grab(size_t frames)
+bool Gocator::grab(size_t frames)
 {
-    _impl->grab(frames);
+    return _impl->grab(frames);
 }
 
 void Gocator::stop()
 {
-    _impl->stop();
+    _impl->stop(true);
 }
 
 bool Gocator::isGrabbing() const
@@ -821,11 +953,14 @@ bool Gocator::isGrabbing() const
     return _impl->isGrabbing.load();
 }
 
-GocatorRuntimeDiagnostics Gocator::runtimeDiagnostics() const noexcept
+GocatorRuntimeDiagnostics Gocator::runtimeDiagnostics() const
 {
+    std::lock_guard<std::mutex> lock(_impl->diagnosticsMutex);
     return {_impl->isGrabbing.load(std::memory_order_acquire),
         _impl->callbackState.deliveredFrames(),
-        _impl->callbackState.failedCallbacks()};
+        _impl->callbackState.failedCallbacks(),
+        _impl->stopFailed,
+        _impl->stopError};
 }
 
 std::string Gocator::getConnectedAddress() const
@@ -840,7 +975,8 @@ Gocator::DeviceInfo Gocator::getConnectedDeviceInfo() const
     DeviceInfo info;
     if (!_impl || !_impl->isOpened.load()) return info;
     info.address = _impl->ipAddress;
-    
+    if (_impl->connection) info.controlPort = _impl->connection->controlPort();
+
     try
     {
         if (_impl->resources)

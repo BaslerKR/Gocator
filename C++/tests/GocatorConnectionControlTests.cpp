@@ -1,5 +1,9 @@
 #include <QtTest/QtTest>
 
+#include <GoPxLSdk/GoDataSet.h>
+#include <GoPxLSdk/GoGdpMsg/GoGdpImage.h>
+#include <kApi/Data/kArray2.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -11,9 +15,37 @@
 #include <utility>
 #include <vector>
 
+#include "Utility/PlaygroundAdapter/GocatorDataSetGraphicsFrameAdapter.h"
 #include "Utility/PlaygroundAdapter/Source/GocatorSourceController.h"
+#include "DeviceRuntime/Contract/SessionFrame.h"
+#include "Internal/GocatorSdkRuntime.h"
+
+class GoGdpMsgTests
+{
+public:
+    static std::shared_ptr<GoPxLSdk::GoGdpImage> monoPixel()
+    {
+        gocator::GocatorSdkRuntime::ensureInitialized();
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        image->width = 1;
+        image->height = 1;
+        image->pixelSize = 1;
+        image->pixelFormat = GoPxLSdk::GoGdpPixelFormat::Mono8;
+        if (kArray2_Construct(image->pixels.Ref(), kTypeOf(k8u), 1, 1, kNULL) != kOK)
+            throw std::runtime_error("Could not allocate the synthetic pixel.");
+        kArray2_DataT(image->pixels.Get(), k8u)[0] = 42;
+        return image;
+    }
+};
 
 namespace {
+
+std::vector<DeviceImageRejectionObservation> imageObservations;
+
+void collectImageObservation(const DeviceImageRejectionObservation& observation) noexcept
+{
+    imageObservations.push_back(observation);
+}
 
 struct FakeGocator {
     std::vector<Gocator::DeviceInfo> devices{
@@ -47,14 +79,24 @@ private slots:
     void singleStopRacingStartStaysExplicit();
     void singleGrabThrowReleasesStartReservation();
     void registeredCallbacksCompleteSingle();
+    void registeredCallbacksCompleteSingle_data();
     void connectAcceptsUndiscoveredAddress();
     void virtualTargetsGetDistinctAddressIdentity();
     void duplicateDiscoveryCollapsesToSingleTarget();
+    void duplicateEndpointMergesMetadata();
+    void sameAddressDifferentPortsStayDistinct();
     void realSensorIdentitySurvivesAddressChange();
     void discoverPublishesCacheAndFailureStaysSilent();
     void startWithoutConnectionReportsInactive();
     void snapshotDoesNotWaitForControlLock();
     void busyGateAndTeardownDrain();
+    void teardownStopFailureDoesNotEscape();
+    void reentrantStopStatusDoesNotPublishStaleTrue();
+    void closePublishesStoppedAfterDisconnect();
+    void imageDiagnosticsResetPerAcquisition();
+    void grabFailurePreservesEffectHint();
+    void singleStopFailureIsNotSuccess();
+    void singleStopFailureIsNotSuccess_data();
 
 private:
     static void bind(GocatorSourceController& controller, FakeGocator& fake);
@@ -87,7 +129,7 @@ void GocatorConnectionControlTests::bind(GocatorSourceController& controller, Fa
             return false;
         }
         // Discovery is advisory: an address that was not discovered is still opened.
-        fake.snapshot = {true, ++fake.generation, targetId};
+        fake.snapshot = {true, ++fake.generation, targetId, targetId};
         return true;
     };
     controller._lifecycle.close = [&fake] {
@@ -488,14 +530,24 @@ void GocatorConnectionControlTests::singleGrabThrowReleasesStartReservation()
     controller.stop();
 }
 
+void GocatorConnectionControlTests::registeredCallbacksCompleteSingle_data()
+{
+    QTest::addColumn<bool>("validImage");
+    QTest::newRow("valid image") << true;
+    QTest::newRow("no usable payload") << false;
+}
+
 void GocatorConnectionControlTests::registeredCallbacksCompleteSingle()
 {
-    // The real constructor registers the producer callbacks. Drive those callbacks directly so a
-    // missing registerGrabCallback/status wiring cannot pass as a successful fake delivery.
+    QFETCH(bool, validImage);
     Gocator gocator;
     GocatorSourceController controller(&gocator);
+    std::size_t frames = 0;
+    controller.setFrameConsumer([&frames](SessionFrame&& frame, unsigned) {
+        if (frame.payload.hasImage()) ++frames;
+    });
     controller._lifecycle.snapshot = [] {
-        return Gocator::ConnectionSnapshot{true, 9, "10.0.0.9"};
+        return Gocator::ConnectionSnapshot{true, 9, "10.0.0.9", "10.0.0.9"};
     };
     controller._lifecycle.beginControl = [] { return true; };
     controller._lifecycle.endControl = [] {};
@@ -509,14 +561,32 @@ void GocatorConnectionControlTests::registeredCallbacksCompleteSingle()
         [promise](DeviceConnectionResult result) { promise->set_value(std::move(result)); }).error,
         DeviceConnectionError::None);
     QTRY_VERIFY(controller._singleInFlight.load());
-    QVERIFY(controller._singleCallbackId != 0);
     gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
-    QVERIFY(gocator.notifyGrabCallbackForTest(controller._singleCallbackId));
+    GoPxLSdk::GoDataSet dataSet;
+    if (validImage) dataSet.Add(GoGdpMsgTests::monoPixel());
+    gocator.receiveDataForTest(dataSet);
     gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
 
     const auto single = future.get();
-    QCOMPARE(single.error, DeviceConnectionError::None);
+    QCOMPARE(frames, validImage ? std::size_t{1} : std::size_t{0});
+    QCOMPARE(single.error, validImage ? DeviceConnectionError::None : DeviceConnectionError::BackendFailure);
     QCOMPARE(single.effect, DeviceConnectionEffect::Applied);
+}
+
+void GocatorConnectionControlTests::closePublishesStoppedAfterDisconnect()
+{
+    Gocator gocator;
+    gocator.notifyStatusForTest(Gocator::ConnectionStatus, true);
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+    std::optional<bool> connectedWhenStopped;
+    const auto observer = gocator.registerStatusCallback([&](Gocator::Status status, bool on) {
+        if (status == Gocator::GrabbingStatus && !on) connectedWhenStopped = gocator.isOpened();
+    });
+    gocator.close();
+    QVERIFY(connectedWhenStopped.has_value());
+    QVERIFY(!*connectedWhenStopped);
+    QVERIFY(!gocator.isGrabbing());
+    gocator.deregisterStatusCallback(observer);
 }
 
 void GocatorConnectionControlTests::singleStopRacingStartStaysExplicit()
@@ -630,6 +700,77 @@ void GocatorConnectionControlTests::duplicateDiscoveryCollapsesToSingleTarget()
     QCOMPARE(targets.result.error, DeviceConnectionError::None);
     QCOMPARE(targets.targets.size(), std::size_t{1});
     QCOMPARE(targets.targets[0].targetId, std::string("192.168.0.105"));
+}
+
+void GocatorConnectionControlTests::duplicateEndpointMergesMetadata()
+{
+    FakeGocator fake;
+    fake.devices = {
+        {"192.168.0.139", "", "0", true, 4400},
+        {"192.168.0.139", "5512", "153472", false, 4400},
+    };
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    const auto targets = awaitTargets(controller, [&](auto done) {
+        return controller.requestConnectionTargets(done);
+    });
+    QCOMPARE(targets.result.error, DeviceConnectionError::None);
+    QCOMPARE(targets.targets.size(), std::size_t{1});
+    QCOMPARE(targets.targets[0].targetId, std::string("192.168.0.139:4400"));
+    QCOMPARE(targets.targets[0].displayName, std::string("G5512 (153472) - 192.168.0.139:4400"));
+    QCOMPARE(targets.targets[0].attributes[0].value, std::string("5512"));
+    QCOMPARE(targets.targets[0].attributes[1].value, std::string("153472"));
+    QCOMPARE(targets.targets[0].attributes[2].value, std::string("false"));
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect(targets.targets[0].targetId, done);
+    });
+    QCOMPARE(connected.error, DeviceConnectionError::None);
+    QVERIFY(connected.state && connected.state->connected);
+    QCOMPARE(connected.state->displayName, targets.targets[0].displayName);
+}
+
+void GocatorConnectionControlTests::sameAddressDifferentPortsStayDistinct()
+{
+    FakeGocator fake;
+    fake.devices = {
+        {"127.0.0.1", "5512", "153472", false, 0},
+        {"192.168.0.139", "", "0", true, 3600},
+        {"192.168.0.139", "", "0", true, 4400},
+        {"192.168.0.139", "", "0", true, 4400},
+    };
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    const auto targets = awaitTargets(controller, [&](auto done) {
+        return controller.requestConnectionTargets(done);
+    });
+    QCOMPARE(targets.result.error, DeviceConnectionError::None);
+    QCOMPARE(targets.targets.size(), std::size_t{2});
+    QCOMPARE(targets.targets[0].targetId, std::string("192.168.0.139"));
+    QCOMPARE(targets.targets[0].displayName, std::string("Unknown (Virtual) - 192.168.0.139"));
+    QCOMPARE(targets.targets[1].targetId, std::string("192.168.0.139:4400"));
+    QCOMPARE(targets.targets[1].displayName, std::string("Unknown (Virtual) - 192.168.0.139:4400"));
+    bool hasPort = false;
+    for (const auto& attribute : targets.targets[1].attributes) {
+        if (attribute.name != "controlPort") continue;
+        hasPort = true;
+        QCOMPARE(attribute.value, std::string("4400"));
+    }
+    QVERIFY(hasPort);
+
+    for (const auto& target : targets.targets) {
+        const auto connected = awaitState(controller, [&](auto done) {
+            return controller.requestConnect(target.targetId, done);
+        });
+        QCOMPARE(connected.error, DeviceConnectionError::None);
+        QVERIFY(connected.state && connected.state->connected);
+        QCOMPARE(connected.state->targetId, target.targetId);
+        QCOMPARE(connected.state->displayName, target.displayName);
+        const auto disconnected = awaitState(controller, [&](auto done) {
+            return controller.requestDisconnect(connected.state->connectionId, done);
+        });
+        QCOMPARE(disconnected.error, DeviceConnectionError::None);
+    }
+    QCOMPARE(fake.opens, 2);
 }
 
 void GocatorConnectionControlTests::realSensorIdentitySurvivesAddressChange()
@@ -770,6 +911,124 @@ void GocatorConnectionControlTests::busyGateAndTeardownDrain()
     }
     QCOMPARE(teardownCompletions.load(), 1);
     QVERIFY(!fake.gate);
+}
+
+void GocatorConnectionControlTests::teardownStopFailureDoesNotEscape()
+{
+    FakeGocator fake;
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    controller._lifecycle.stop = [] {
+        throw std::runtime_error("stop timeout");
+    };
+}
+
+void GocatorConnectionControlTests::reentrantStopStatusDoesNotPublishStaleTrue()
+{
+    Gocator gocator;
+    std::vector<bool> observed;
+    const auto first = gocator.registerStatusCallback([&](Gocator::Status status, bool on) {
+        if (status == Gocator::GrabbingStatus && on) gocator.stop();
+    });
+    const auto second = gocator.registerStatusCallback([&](Gocator::Status status, bool on) {
+        if (status == Gocator::GrabbingStatus) observed.push_back(on);
+    });
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+    bool sawFalse = false;
+    for (const bool value : observed) {
+        if (sawFalse) QVERIFY(!value);
+        if (!value) sawFalse = true;
+    }
+    QVERIFY(sawFalse);
+    gocator.deregisterStatusCallback(first);
+    gocator.deregisterStatusCallback(second);
+}
+
+void GocatorConnectionControlTests::imageDiagnosticsResetPerAcquisition()
+{
+    imageObservations.clear();
+    FakeGocator fake;
+    GocatorSourceController controller(nullptr, nullptr, nullptr, &collectImageObservation);
+    bind(controller, fake);
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("192.168.1.10", done);
+    });
+    QVERIFY(connected.state);
+    QVERIFY(controller.beginGrab(0));
+    GocatorImageRejection rejection;
+    rejection.reason = GraphicsImageFailure::StorageRefused;
+    rejection.width = 2;
+    rejection.height = 1;
+    controller.reportImageRejection(rejection, 11);
+    controller.reportImageRejection(rejection, 12);
+    QCOMPARE(imageObservations.size(), std::size_t{1});
+    QCOMPARE(imageObservations.front().frameSequence, std::uint64_t{11});
+    controller.stop();
+    QVERIFY(controller.beginGrab(0));
+    controller.reportImageRejection(rejection, 13);
+    QCOMPARE(imageObservations.size(), std::size_t{2});
+    QCOMPARE(imageObservations.back().frameSequence, std::uint64_t{13});
+    controller.stop();
+}
+
+void GocatorConnectionControlTests::grabFailurePreservesEffectHint()
+{
+    FakeGocator fake;
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("192.168.1.10", done);
+    });
+    QVERIFY(connected.state);
+    controller._lifecycle.grab = [](std::size_t) -> bool {
+        throw Gocator::GrabError(Gocator::GrabFailure::StartUncertain, "start timeout", true);
+    };
+    const auto uncertain = awaitState(controller, [&](auto done) {
+        return controller.requestLiveStart(connected.state->connectionId, done);
+    });
+    QCOMPARE(uncertain.error, DeviceConnectionError::BackendFailure);
+    QCOMPARE(uncertain.effect, DeviceConnectionEffect::Unknown);
+    controller._lifecycle.grab = [](std::size_t) -> bool {
+        throw Gocator::GrabError(Gocator::GrabFailure::Attach, "replay stopped", false);
+    };
+    const auto refused = awaitState(controller, [&](auto done) {
+        return controller.requestLiveStart(connected.state->connectionId, done);
+    });
+    QCOMPARE(refused.error, DeviceConnectionError::BackendFailure);
+    QCOMPARE(refused.effect, DeviceConnectionEffect::None);
+}
+
+void GocatorConnectionControlTests::singleStopFailureIsNotSuccess_data()
+{
+    QTest::addColumn<bool>("delivered");
+    QTest::newRow("frame delivered") << true;
+    QTest::newRow("no frame delivered") << false;
+}
+
+void GocatorConnectionControlTests::singleStopFailureIsNotSuccess()
+{
+    QFETCH(bool, delivered);
+    FakeGocator fake;
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("192.168.1.10", done);
+    });
+    QVERIFY(connected.state);
+    auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto future = promise->get_future();
+    QCOMPARE(controller.requestSingle(connected.state->connectionId,
+        [promise](DeviceConnectionResult result) { promise->set_value(std::move(result)); }).error,
+        DeviceConnectionError::None);
+    QTRY_VERIFY(controller._singleInFlight.load());
+    if (delivered) controller.noteAcquisitionFrame();
+    fake.diagnostics.stopFailed = true;
+    fake.diagnostics.stopError = "stop timeout";
+    controller.noteAcquisitionEnded();
+    const auto result = future.get();
+    QCOMPARE(result.error, DeviceConnectionError::BackendFailure);
+    QCOMPARE(result.effect, DeviceConnectionEffect::Unknown);
+    QCOMPARE(QString::fromStdString(result.message), QStringLiteral("stop timeout"));
 }
 
 QTEST_MAIN(GocatorConnectionControlTests)

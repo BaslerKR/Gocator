@@ -13,14 +13,16 @@
 
 class Gocator;
 struct GocatorRangeRejection;
+struct GocatorImageRejection;
 
 /** Owns Gocator SDK callback registration and emits only owned GraphicsFrame values. */
 class GocatorGraphicsFrameStream final
 {
 public:
     using RejectedRange = std::function<void(const GocatorRangeRejection&, std::size_t)>;
+    using RejectedImage = std::function<void(const GocatorImageRejection&, std::size_t)>;
     GocatorGraphicsFrameStream(Gocator* gocator, GraphicsFrameCallback callback,
-                               RejectedRange rejectedRange = {});
+                               RejectedRange rejectedRange = {}, RejectedImage rejectedImage = {});
     ~GocatorGraphicsFrameStream();
 
     GocatorGraphicsFrameStream(const GocatorGraphicsFrameStream&) = delete;

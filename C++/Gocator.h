@@ -9,6 +9,8 @@
 #include <optional>
 #include <stdexcept>
 
+#include "GocatorTypes.h"
+
 namespace gocator {
 /** @brief Stage whose outer SDK operation failed while preparing acquisition output. */
 enum class OutputPreparationFailure { Preparation, Enable, Registration };
@@ -25,6 +27,8 @@ struct GocatorRuntimeDiagnostics
     bool grabbing = false;
     std::uint64_t delivered = 0;
     std::uint64_t failed = 0;
+    bool stopFailed = false;
+    std::string stopError;
 };
 
 class Gocator
@@ -43,11 +47,30 @@ public:
         ControlStatus
     };
 
+    enum class GrabFailure {
+        OutputPreparation, StateUnknown, GdpConnect, Attach, AlreadyRunning,
+        StartRefused, StartUncertain, PriorStopUncertain, ReceiveStart
+    };
+
+    class GrabError final : public std::runtime_error
+    {
+    public:
+        GrabError(GrabFailure failure, const std::string& reason, const bool mayHaveEffect)
+            : std::runtime_error(reason), _failure(failure), _mayHaveEffect(mayHaveEffect) {}
+        [[nodiscard]] GrabFailure failure() const noexcept { return _failure; }
+        [[nodiscard]] bool mayHaveEffect() const noexcept { return _mayHaveEffect; }
+
+    private:
+        GrabFailure _failure;
+        bool _mayHaveEffect;
+    };
+
     struct DeviceInfo {
         std::string address;
         std::string model;
         std::string serial;
         bool isVirtual = false;
+        std::uint16_t controlPort = gocator::kDefaultControlPort;
     };
 
     /** @brief Copies the logical connection and its generation under one lock. */
@@ -55,6 +78,7 @@ public:
         bool opened = false;
         std::uint64_t generation = 0;
         std::string address;
+        std::string targetId;
     };
 
     /** @brief Formats the stable human-readable target label shared by UI and API surfaces. */
@@ -128,7 +152,7 @@ public:
     bool isOpened() const;
     /** @brief Copies the connection state and generation for lifecycle consumers. */
     ConnectionSnapshot connectionSnapshot() const;
-    void close();
+    void close(bool throwOnFailure = false);
 
     /** @brief Serializes discovery, connect and disconnect across GUI and API surfaces. */
     bool tryBeginControl();
@@ -176,11 +200,12 @@ public:
     [[nodiscard]] ParameterWriteResult setParameterValue(const std::string& type, const std::string& path,
         const std::string& jsonValue);
 
-    void grab(size_t frames = 0);
+    /** @brief Returns whether this call started receiving, even if a finite grab already ended. */
+    bool grab(size_t frames = 0);
     void stop();
     bool isGrabbing() const;
     /** @brief Returns live producer counters for the device statusbar. */
-    [[nodiscard]] GocatorRuntimeDiagnostics runtimeDiagnostics() const noexcept;
+    [[nodiscard]] GocatorRuntimeDiagnostics runtimeDiagnostics() const;
 
     std::string getConnectedAddress() const;
     DeviceInfo getConnectedDeviceInfo() const;
@@ -191,8 +216,8 @@ private:
     friend class GocatorConnectionControlTests;
     /** @brief Test seam: holds the connection control lock while the callbacks run. */
     void holdControlForTest(const std::function<void()>& entered, const std::function<void()>& release);
-    /** @brief Test seam: invokes one registered grab callback with an empty dataset. */
-    bool notifyGrabCallbackForTest(CallbackId id);
+    /** @brief Test seam: delivers a synthetic dataset through the production receiver. */
+    void receiveDataForTest(const GoPxLSdk::GoDataSet& dataSet);
     /** @brief Test seam: publishes one status transition to registered observers. */
     void notifyStatusForTest(Status status, bool on);
 

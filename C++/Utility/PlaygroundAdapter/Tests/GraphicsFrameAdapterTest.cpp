@@ -5,6 +5,8 @@
 #include "graphics/data/GraphicsRangeFrameWriter.h"
 
 #include <GoPxLSdk/GoDataSet.h>
+#include <GoPxLSdk/GoGdpMsg/GoGdpImage.h>
+#include <GoPxLSdk/GoGdpMsg/GoGdpPixelFormat.h>
 #include <GoPxLSdk/GoGdpMsg/GoGdpProfilePointCloud.h>
 #include <GoPxLSdk/GoGdpMsg/GoGdpProfileUniform.h>
 #include <GoPxLSdk/GoGdpMsg/GoGdpStamp.h>
@@ -64,6 +66,59 @@ public:
     static void setStamp(GoPxLSdk::GoGdpStamp& message, const k64u frameIndex)
     {
         message.frameIndex = frameIndex;
+    }
+
+    static void setImage(GoPxLSdk::GoGdpImage& message,
+                         const k32u width,
+                         const k32u height,
+                         const GoPxLSdk::GoGdpPixelFormat::FormatType format,
+                         const std::vector<k8u>& pixels)
+    {
+        assert(pixels.size() == std::size_t(width) * std::size_t(height));
+        message.width = width;
+        message.height = height;
+        message.pixelSize = sizeof(k8u);
+        message.pixelFormat = format;
+        kArray2_Construct(message.pixels.Ref(), kTypeOf(k8u), height, width, kNULL);
+        std::memcpy(kArray2_DataT(message.pixels.Get(), k8u), pixels.data(), pixels.size());
+    }
+
+    static void setImage(GoPxLSdk::GoGdpImage& message,
+                         const k32u width,
+                         const k32u height,
+                         const GoPxLSdk::GoGdpPixelFormat::FormatType format,
+                         const std::vector<k16u>& pixels)
+    {
+        assert(pixels.size() == std::size_t(width) * std::size_t(height));
+        message.width = width;
+        message.height = height;
+        message.pixelSize = sizeof(k16u);
+        message.pixelFormat = format;
+        kArray2_Construct(message.pixels.Ref(), kTypeOf(k16u), height, width, kNULL);
+        std::memcpy(kArray2_DataT(message.pixels.Get(), k16u), pixels.data(),
+            pixels.size() * sizeof(k16u));
+    }
+
+    static void setImageBuffer(GoPxLSdk::GoGdpImage& message,
+                               const k32u width,
+                               const k32u height,
+                               const GoPxLSdk::GoGdpPixelFormat::FormatType format,
+                               const k32u pixelSize,
+                               const k32u rowBytes,
+                               const std::vector<k8u>& bytes)
+    {
+        assert(bytes.size() == std::size_t(rowBytes) * std::size_t(height));
+        message.width = width;
+        message.height = height;
+        message.pixelSize = pixelSize;
+        message.pixelFormat = format;
+        kArray2_Construct(message.pixels.Ref(), kTypeOf(k8u), height, rowBytes, kNULL);
+        std::memcpy(kArray2_DataT(message.pixels.Get(), k8u), bytes.data(), bytes.size());
+    }
+
+    static void setImageHeight(GoPxLSdk::GoGdpImage& message, const k32u height)
+    {
+        message.height = height;
     }
 
     static void setSurfaceWidth(GoPxLSdk::GoGdpSurfaceUniform& message, k32u width)
@@ -287,6 +342,321 @@ int main()
 
     {
         GoPxLSdk::GoDataSet dataSet;
+        dataSet.Add(stamp(42));
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImage(*image, 2, 2, GoPxLSdk::GoGdpPixelFormat::Mono8,
+            std::vector<k8u>{0, 64, 128, 255});
+        dataSet.Add(image);
+        GraphicsFrameRequest imageRequest;
+        imageRequest.components = GraphicsFrameComponent::Image;
+        const auto converted = adapter.convertFrameWithRejection(dataSet, imageRequest, rejection);
+        assert(converted && converted->images.size() == 1U && converted->ranges.empty());
+        const auto& result = converted->images.front().payload;
+        assert(result.isValid());
+        assert(result.width == 2 && result.height == 2);
+        assert(result.pixelFormat == GraphicsImagePixelFormat::Mono8);
+        assert(result.size == 4U);
+        assert(result.data()[0] == 0U && result.data()[1] == 64U
+            && result.data()[2] == 128U && result.data()[3] == 255U);
+        assert(converted->metadata.frameId == "42");
+        assert(rejection.reason == Rejection::None);
+        assert(!rejection.rangeRetained);
+    }
+
+    {
+        RecordingStorage storage;
+        adapter.setFrameStorage(storage.function());
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImage(*image, 2, 1, GoPxLSdk::GoGdpPixelFormat::Mono16,
+            std::vector<k16u>{256, 4096});
+        GoGdpMsgTests::setDataSetId(*image, 9U);
+        dataSet.Add(image);
+        GraphicsFrameRequest imageRequest;
+        imageRequest.components = GraphicsFrameComponent::Image;
+        const auto converted = adapter.convertFrame(dataSet, imageRequest);
+        assert(converted && converted->images.size() == 1U);
+        const auto& result = converted->images.front().payload;
+        assert(result.pixelFormat == GraphicsImagePixelFormat::Mono16);
+        assert(result.size == 4U && storage.calls == 1U && storage.bytes == 4U);
+        const auto* samples = reinterpret_cast<const std::uint8_t*>(result.data());
+        assert(samples >= storage.block.get() && samples < storage.block.get() + storage.bytes);
+        assert(converted->metadata.frameId == "9");
+        adapter.setFrameStorage({});
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImage(*image, 2, 2, GoPxLSdk::GoGdpPixelFormat::BayerGR10,
+            std::vector<k16u>{0, 64, 128, 1023});
+        dataSet.Add(image);
+        GraphicsFrameRequest imageRequest;
+        imageRequest.components = GraphicsFrameComponent::Image;
+        const auto converted = adapter.convertFrame(dataSet, imageRequest);
+        assert(converted && converted->images.size() == 1U);
+        const auto& result = converted->images.front().payload;
+        assert(result.pixelFormat == GraphicsImagePixelFormat::BayerGR10);
+        assert(result.bitAlignment == GraphicsImageBitAlignment::LeastSignificant);
+        assert(result.stride == 4 && result.size == 8U);
+        const auto* samples = reinterpret_cast<const std::uint16_t*>(result.data());
+        assert((samples[0] & 0x3FFU) == 0U);
+        assert((samples[1] & 0x3FFU) == 64U);
+        assert((samples[2] & 0x3FFU) == 128U);
+        assert((samples[3] & 0x3FFU) == 1023U);
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImageBuffer(*image, 2, 1, GoPxLSdk::GoGdpPixelFormat::Mono12p,
+            2U, 3U, std::vector<k8u>{0x23, 0xC1, 0xAB});
+        dataSet.Add(image);
+        GraphicsFrameRequest imageRequest;
+        imageRequest.components = GraphicsFrameComponent::Image;
+        const auto converted = adapter.convertFrame(dataSet, imageRequest);
+        assert(converted && converted->images.size() == 1U);
+        const auto& result = converted->images.front().payload;
+        assert(result.pixelFormat == GraphicsImagePixelFormat::Mono12Packed);
+        assert(result.bitAlignment == GraphicsImageBitAlignment::Packed);
+        assert(result.stride == 3 && result.size == 3U);
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImageBuffer(*image, 2, 1, GoPxLSdk::GoGdpPixelFormat::Mono12Packed,
+            2U, 3U, std::vector<k8u>{0x23, 0xC1, 0xAB});
+        dataSet.Add(image);
+        GraphicsFrameRequest imageRequest;
+        imageRequest.components = GraphicsFrameComponent::Image;
+        assert(!adapter.convertFrame(dataSet, imageRequest));
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImageBuffer(*image, 2, 2, GoPxLSdk::GoGdpPixelFormat::Mono8,
+            1U, 3U, std::vector<k8u>{1, 2, 0, 3, 4, 0});
+        dataSet.Add(image);
+        GraphicsFrameRequest imageRequest;
+        imageRequest.components = GraphicsFrameComponent::Image;
+        const auto converted = adapter.convertFrame(dataSet, imageRequest);
+        assert(converted && converted->images.size() == 1U);
+        const auto& result = converted->images.front().payload;
+        assert(result.stride == 3 && result.size == 6U);
+        assert(result.data()[0] == 1U && result.data()[1] == 2U);
+        assert(result.data()[3] == 3U && result.data()[4] == 4U);
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImageBuffer(*image, 1, 1, GoPxLSdk::GoGdpPixelFormat::Mono8,
+            2U, 1U, std::vector<k8u>{255});
+        dataSet.Add(image);
+        GraphicsFrameRequest imageRequest;
+        imageRequest.components = GraphicsFrameComponent::Image;
+        assert(!adapter.convertFrame(dataSet, imageRequest));
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImageBuffer(*image, 3, 1, GoPxLSdk::GoGdpPixelFormat::YCbCr422_8,
+            2U, 6U, std::vector<k8u>{0, 0, 0, 0, 0, 0});
+        dataSet.Add(image);
+        GraphicsFrameRequest imageRequest;
+        imageRequest.components = GraphicsFrameComponent::Image;
+        assert(!adapter.convertFrame(dataSet, imageRequest));
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImage(*image, 1, 1, GoPxLSdk::GoGdpPixelFormat::Null_Format,
+            std::vector<k8u>{1});
+        dataSet.Add(image);
+        GraphicsFrameRequest imageRequest;
+        imageRequest.components = GraphicsFrameComponent::Image;
+        assert(!adapter.convertFrame(dataSet, imageRequest));
+    }
+
+    {
+        RecordingStorage storage;
+        adapter.setFrameStorage(storage.function());
+        GoPxLSdk::GoDataSet dataSet;
+        dataSet.Add(stamp(7));
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImage(*image, 1, 1, GoPxLSdk::GoGdpPixelFormat::Mono8,
+            std::vector<k8u>{255});
+        dataSet.Add(image);
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        GoGdpMsgTests::setUniformSurface(*surface, 1, 1, {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0},
+            {1}, {});
+        dataSet.Add(surface);
+        GraphicsFrameRequest allRequest;
+        allRequest.components = GraphicsFrameComponent::All;
+        const auto converted = adapter.convertFrameWithRejection(dataSet, allRequest, rejection);
+        assert(converted && converted->images.empty() && converted->ranges.size() == 1U);
+        assert(converted->metadata.frameId == "7");
+        assert(converted->ranges.front().descriptor.groupId == "primary");
+        assert(storage.calls == 1U);
+        assert(reinterpret_cast<const std::uint8_t*>(
+            converted->ranges.front().payload.zValues.data()) == storage.block.get());
+        assert(rejection.reason == Rejection::None && rejection.rangeRetained);
+        adapter.setFrameStorage({});
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImage(*image, 1, 1, GoPxLSdk::GoGdpPixelFormat::Mono8,
+            std::vector<k8u>{255});
+        dataSet.Add(image);
+        GraphicsFrameRequest allRequest;
+        allRequest.components = GraphicsFrameComponent::All;
+        GocatorImageRejection imageRejection;
+        const auto converted = adapter.convertFrameWithRejection(
+            dataSet, allRequest, rejection, &imageRejection);
+        assert(converted && converted->images.size() == 1U && converted->ranges.empty());
+        assert(rejection.reason == Rejection::MissingRange);
+        assert(rejection.frameRetained && rejection.imageRetained && !rejection.rangeRetained);
+        assert(imageRejection.reason == GraphicsImageFailure::None && imageRejection.imageRetained);
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImageBuffer(*image, 2, 1, GoPxLSdk::GoGdpPixelFormat::Mono12Packed,
+            2U, 3U, std::vector<k8u>{0x23, 0xC1, 0xAB});
+        dataSet.Add(image);
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        GoGdpMsgTests::setUniformSurface(*surface, 1, 1, {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0},
+            {1}, {});
+        dataSet.Add(surface);
+        GraphicsFrameRequest allRequest;
+        allRequest.components = GraphicsFrameComponent::All;
+        const auto converted = adapter.convertFrameWithRejection(dataSet, allRequest, rejection);
+        assert(converted && converted->images.empty() && converted->ranges.size() == 1U);
+        assert(rejection.reason == Rejection::None && rejection.rangeRetained);
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImage(*image, 1, 1, GoPxLSdk::GoGdpPixelFormat::Null_Format,
+            std::vector<k8u>{1});
+        dataSet.Add(image);
+        GraphicsFrameRequest allRequest;
+        allRequest.components = GraphicsFrameComponent::All;
+        GocatorImageRejection imageRejection;
+        assert(!adapter.convertFrameWithRejection(
+            dataSet, allRequest, rejection, &imageRejection).has_value());
+        assert(rejection.reason == Rejection::MissingRange && !rejection.frameRetained);
+        assert(imageRejection.reason == GraphicsImageFailure::UnsupportedFormat);
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImageBuffer(*image, 2, 2, GoPxLSdk::GoGdpPixelFormat::Mono8,
+            1, 1, {10, 20});
+        dataSet.Add(image);
+        GraphicsFrameRequest request;
+        request.components = GraphicsFrameComponent::Image;
+        GocatorImageRejection evidence;
+        assert(!adapter.convertFrameWithRejection(dataSet, request, rejection, &evidence));
+        assert(evidence.reason == GraphicsImageFailure::StrideBelowMinimum);
+        assert(evidence.reportedStride == 1U && evidence.minimumRowBytes == 2U);
+        assert(evidence.readableBytes == 2U && evidence.requiredBytes == 4U);
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImageBuffer(*image, 2, 2, GoPxLSdk::GoGdpPixelFormat::Mono8,
+            1, 3, {10, 20, 0, 30, 40, 0});
+        GoGdpMsgTests::setImageHeight(*image, 1);
+        dataSet.Add(image);
+        GraphicsFrameRequest request;
+        request.components = GraphicsFrameComponent::Image;
+        RecordingStorage storage;
+        adapter.setFrameStorage(storage.function());
+        const auto frame = adapter.convertFrame(dataSet, request);
+        assert(frame && frame->images.size() == 1U);
+        assert(frame->images.front().payload.size == 3U);
+        assert(storage.calls == 1U && storage.bytes == 3U);
+        adapter.setFrameStorage({});
+    }
+
+    {
+        std::size_t calls = 0;
+        adapter.setFrameStorage([&](const std::size_t) -> std::shared_ptr<std::uint8_t> {
+            ++calls;
+            return {};
+        });
+        GoPxLSdk::GoDataSet dataSet;
+        for (int index = 0; index < 2; ++index) {
+            auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+            GoGdpMsgTests::setImage(*image, 1, 1, GoPxLSdk::GoGdpPixelFormat::Mono8,
+                std::vector<k8u>{255});
+            dataSet.Add(image);
+        }
+        GraphicsFrameRequest allRequest;
+        allRequest.components = GraphicsFrameComponent::All;
+        GocatorImageRejection imageRejection;
+        assert(!adapter.convertFrameWithRejection(
+            dataSet, allRequest, rejection, &imageRejection).has_value());
+        assert(calls == 1U);
+        assert(imageRejection.reason == GraphicsImageFailure::StorageRefused);
+        adapter.setFrameStorage({});
+    }
+
+    {
+        std::size_t calls = 0;
+        adapter.setFrameStorage([&](const std::size_t) -> std::shared_ptr<std::uint8_t> {
+            ++calls;
+            return {};
+        });
+        GoPxLSdk::GoDataSet dataSet;
+        for (int index = 0; index < 2; ++index) {
+            auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+            GoGdpMsgTests::setUniformSurface(*surface, 1, 1,
+                {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {1}, {});
+            dataSet.Add(surface);
+        }
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImage(*image, 1, 1, GoPxLSdk::GoGdpPixelFormat::Mono8,
+            std::vector<k8u>{255});
+        dataSet.Add(image);
+        GraphicsFrameRequest allRequest;
+        allRequest.components = GraphicsFrameComponent::All;
+        assert(!adapter.convertFrameWithRejection(dataSet, allRequest, rejection).has_value());
+        assert(calls == 1U);
+        assert(rejection.reason == Rejection::StorageRefused);
+        adapter.setFrameStorage({});
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        GoGdpMsgTests::setUniformSurface(*surface, 2, 1,
+            {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {1, 2}, {});
+        GoGdpMsgTests::setSurfaceWidth(*surface, 3);
+        dataSet.Add(surface);
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImage(*image, 1, 1, GoPxLSdk::GoGdpPixelFormat::Mono8,
+            std::vector<k8u>{255});
+        dataSet.Add(image);
+        GraphicsFrameRequest allRequest;
+        allRequest.components = GraphicsFrameComponent::All;
+        assert(!adapter.convertFrameWithRejection(dataSet, allRequest, rejection).has_value());
+        assert(rejection.reason == Rejection::TruncatedData);
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
         auto shortSurface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
         auto validSurface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
         for (const auto& surface : {shortSurface, validSurface}) {
@@ -325,6 +695,32 @@ int main()
         const auto* samples = reinterpret_cast<const std::uint8_t*>(
             converted->ranges.front().payload.zValues.data());
         assert(samples >= storage.block.get() && samples < storage.block.get() + storage.bytes);
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        GoGdpMsgTests::setUniformSurface(*surface, 2, 2,
+            {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {1, 2, 3, 4}, {});
+        GoGdpMsgTests::setSurfaceWidth(*surface, 1);
+        dataSet.Add(surface);
+        RecordingStorage storage;
+        adapter.setFrameStorage(storage.function());
+        assert(!adapter.convertFrameWithRejection(dataSet, rangeRequest, rejection));
+        assert(rejection.reason == Rejection::InvalidLayout);
+        assert(storage.calls == 0U);
+        adapter.setFrameStorage({});
+    }
+
+    {
+        GoPxLSdk::GoDataSet dataSet;
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        GoGdpMsgTests::setUniformSurface(*surface, 1, 2,
+            {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {1, 2}, {10, 20, 30, 40}, 2, 2);
+        dataSet.Add(surface);
+        const auto frame = adapter.convertFrame(dataSet, rangeRequest);
+        assert(frame && frame->ranges.size() == 1U);
+        assert(frame->ranges.front().payload.intensity.empty());
     }
 
     // The same input without provided storage still converts, through the

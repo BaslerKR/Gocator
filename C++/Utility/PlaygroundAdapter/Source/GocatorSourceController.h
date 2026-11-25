@@ -7,6 +7,7 @@
 #include "DeviceRuntime/Contract/FrameStorage.h"
 #include "GocatorParameterNotifications.h"
 #include "GocatorParameterTree.h"
+#include "engine/GraphicsFrameAdapter.h"
 #include <QFuture>
 #include <array>
 #include <atomic>
@@ -21,6 +22,7 @@
 
 class GocatorGraphicsFrameStream;
 struct GocatorRangeRejection;
+struct GocatorImageRejection;
 
 class GocatorSourceController : public AbstractSourceController, public IDeviceParameterControl, public IDeviceConnectionControl,
                                 public IFrameStorageClient {
@@ -33,7 +35,8 @@ public:
     using TargetsCompletion = IDeviceConnectionControl::TargetsCompletion;
 
     explicit GocatorSourceController(Gocator* gocator, QObject* parent = nullptr,
-                                     DeviceRangeRejectionSink rangeRejectionSink = nullptr);
+                                     DeviceRangeRejectionSink rangeRejectionSink = nullptr,
+                                     DeviceImageRejectionSink imageRejectionSink = nullptr);
     ~GocatorSourceController() override;
 
     /** @brief Copies producer counters used by the device statusbar. */
@@ -239,11 +242,15 @@ private:
     std::atomic<bool> _acquisitionStarting{false};
 
     Gocator::CallbackId _statusCallbackId = 0;
-    Gocator::CallbackId _singleCallbackId = 0;
+    GraphicsFrameCallbackGate _statusCallbackGate;
     std::unique_ptr<GocatorGraphicsFrameStream> _graphicsStream;
     std::shared_ptr<IFrameStorageProvider> _frameStorage;
     const DeviceRangeRejectionSink _rangeRejectionSink;
+    const DeviceImageRejectionSink _imageRejectionSink;
     std::array<std::atomic<std::uint64_t>,
         static_cast<std::size_t>(DeviceRangeRejection::StorageMisaligned) + 1> _rangeRejections{};
+    std::array<std::atomic<std::uint64_t>,
+        static_cast<std::size_t>(DeviceImageRejection::NoImage) + 1> _imageRejections{};
     void reportRangeRejection(const GocatorRangeRejection& rejection, std::size_t frameSequence) noexcept;
+    void reportImageRejection(const GocatorImageRejection& rejection, std::size_t frameSequence) noexcept;
 };

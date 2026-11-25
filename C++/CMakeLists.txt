@@ -175,6 +175,28 @@ if(GOCATOR_BUILD_TESTS)
     else()
         add_test(NAME GocatorOutputPreparationTests COMMAND GocatorOutputPreparationTests)
     endif()
+
+    add_executable(GocatorSelectionTests tests/GocatorSelectionTests.cpp)
+    set_target_properties(GocatorSelectionTests PROPERTIES AUTOMOC ON)
+    target_link_libraries(GocatorSelectionTests PRIVATE gocator_core Qt6::Test)
+    if(WIN32)
+        add_test(NAME GocatorSelectionTests COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=${GOPXL_SDK_DIR}/lib/${gopxl_platform_dir};$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:GocatorSelectionTests>)
+    else()
+        add_test(NAME GocatorSelectionTests COMMAND GocatorSelectionTests)
+    endif()
+
+    add_executable(GocatorConnectionStateTests tests/GocatorConnectionStateTests.cpp)
+    set_target_properties(GocatorConnectionStateTests PROPERTIES AUTOMOC ON)
+    target_link_libraries(GocatorConnectionStateTests PRIVATE gocator_core Qt6::Test)
+    if(WIN32)
+        add_test(NAME GocatorConnectionStateTests COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=${GOPXL_SDK_DIR}/lib/${gopxl_platform_dir};$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:GocatorConnectionStateTests>)
+    else()
+        add_test(NAME GocatorConnectionStateTests COMMAND GocatorConnectionStateTests)
+    endif()
 endif()
 
 set(gocator_runtime_targets
@@ -398,7 +420,7 @@ if(GOCATOR_BUILD_PLAYGROUND_PLUGIN)
 endif()
 
 # Keep contract assertions active in Release validation.
-foreach(module_test IN ITEMS GocatorGraphicsFrameAdapterTests GocatorParameterControlTests GocatorConnectionControlTests GocatorParameterLoopbackTests)
+foreach(module_test IN ITEMS GocatorGraphicsFrameAdapterTests GocatorParameterControlTests GocatorConnectionControlTests GocatorParameterLoopbackTests GocatorSelectionTests GocatorConnectionStateTests)
     if(TARGET ${module_test})
         target_compile_options(${module_test} PRIVATE
             $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>

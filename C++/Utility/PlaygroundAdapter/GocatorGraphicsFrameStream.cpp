@@ -15,9 +15,7 @@ namespace {
 [[nodiscard]] GraphicsFrameRequest gocatorGraphicsFrameRequest() noexcept
 {
     GraphicsFrameRequest request;
-    // Gocator GDP messages carry measured range data. Point-cloud/surface
-    // views are derived by GraphicsEngine from this authoritative payload.
-    request.components = GraphicsFrameComponent::Range;
+    request.components = GraphicsFrameComponent::Image | GraphicsFrameComponent::Range;
     request.includeRangeAuxiliaryChannels = true;
     request.includePointCloudColors = true;
     return request;
@@ -28,7 +26,8 @@ namespace {
 class GocatorGraphicsFrameStream::Impl final
 {
 public:
-    Impl(Gocator* gocator, GraphicsFrameCallback callback, RejectedRange rejectedRange);
+    Impl(Gocator* gocator, GraphicsFrameCallback callback, RejectedRange rejectedRange,
+         RejectedImage rejectedImage);
     ~Impl();
 
     Impl(const Impl&) = delete;
@@ -50,7 +49,8 @@ private:
 GocatorGraphicsFrameStream::Impl::Impl(
     Gocator* gocator,
     GraphicsFrameCallback callback,
-    RejectedRange rejectedRange)
+    RejectedRange rejectedRange,
+    RejectedImage rejectedImage)
     : _gocator(gocator), _callback(std::move(callback))
 {
     if (!_gocator || !_callback)
@@ -60,18 +60,23 @@ GocatorGraphicsFrameStream::Impl::Impl(
 
     const auto callbackToken = _callbackGate.token();
     _grabCallbackId = _gocator->registerGrabCallback(
-        [this, callbackToken, rejectedRange = std::move(rejectedRange)](
+        [this, callbackToken, rejectedRange = std::move(rejectedRange),
+         rejectedImage = std::move(rejectedImage)](
             const GoPxLSdk::GoDataSet& dataSet, const std::size_t sequence) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
             if (!lease) return;
             try
             {
                 GocatorRangeRejection rejection;
-                auto frame = rejectedRange
-                    ? _adapter.convertFrameWithRejection(dataSet, gocatorGraphicsFrameRequest(), rejection)
+                GocatorImageRejection imageRejection;
+                auto frame = rejectedRange || rejectedImage
+                    ? _adapter.convertFrameWithRejection(dataSet, gocatorGraphicsFrameRequest(),
+                        rejection, &imageRejection)
                     : _adapter.convertFrame(dataSet, gocatorGraphicsFrameRequest());
-                if (rejection.reason != GocatorRangeRejection::Reason::None)
+                if (rejectedRange && rejection.reason != GocatorRangeRejection::Reason::None)
                     rejectedRange(rejection, sequence);
+                if (rejectedImage && imageRejection.reason != GraphicsImageFailure::None)
+                    rejectedImage(imageRejection, sequence);
                 if (frame.has_value())
                 {
                     frame->metadata.frameIndex = sequence;
@@ -103,8 +108,10 @@ GocatorGraphicsFrameStream::Impl::~Impl()
 GocatorGraphicsFrameStream::GocatorGraphicsFrameStream(
     Gocator* gocator,
     GraphicsFrameCallback callback,
-    RejectedRange rejectedRange)
-    : _impl(std::make_unique<Impl>(gocator, std::move(callback), std::move(rejectedRange)))
+    RejectedRange rejectedRange,
+    RejectedImage rejectedImage)
+    : _impl(std::make_unique<Impl>(gocator, std::move(callback), std::move(rejectedRange),
+        std::move(rejectedImage)))
 {
 }
 

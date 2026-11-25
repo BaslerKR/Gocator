@@ -4,8 +4,8 @@ Gocator is a C++17 acquisition and configuration facade for LMI Gocator sensors 
 
 ## Capabilities
 
-- Discover sensors and open a connection by IP address.
-- Receive `GoDataSet` profile or surface payloads through registered callbacks.
+- Discover sensors and open a connection by IP address or `address:port` target.
+- Receive `GoDataSet` image, profile or surface payloads through registered callbacks.
 - Configure scan length, scan mode, exposure, intensity, and uniform spacing.
 - Read parameter schemas and values or write individual scanner and sensor parameters through the REST resources; scanner resources include firmware-exposed motion and alignment settings.
 - Preserve schema-provided numeric precision and increments in the typed parameter descriptors consumed by the host device panel, including sub-unit spacing values.
@@ -41,17 +41,21 @@ The optional Playground device plugin is a separate MODULE. Enable `GOCATOR_BUIL
 
 Gocator sensor;
 const auto devices = sensor.discoverDevices();
-if (!devices.empty() && sensor.open(devices.front().address)) {
-    sensor.setScanMode(Gocator::SurfaceMode);
-    sensor.registerGrabCallback(
-        [](const GoPxLSdk::GoDataSet& dataSet, std::size_t sequence) {
-            // Consume dataSet during this callback.
-        });
-    sensor.grab();
+if (!devices.empty()) {
+    const auto& target = devices.front();
+    const std::string targetId = target.address + ":" + std::to_string(target.controlPort);
+    if (sensor.open(targetId)) {
+        sensor.setScanMode(Gocator::SurfaceMode);
+        sensor.registerGrabCallback(
+            [](const GoPxLSdk::GoDataSet& dataSet, std::size_t sequence) {
+                // Consume dataSet during this callback.
+            });
+        sensor.grab();
+    }
 }
 ```
 
-Grab callbacks run on the module's receive path. Keep callbacks bounded and avoid synchronous logging or GUI access there. Stop acquisition before closing or destroying the facade.
+Grab callbacks run on the module's receive path. Keep callbacks bounded and dispatch connection or acquisition commands to another thread so the receive path can finish before Stop or Disconnect drains it. Avoid synchronous logging or GUI access there. `grab()` returns whether reception started, including finite grabs that finish before the caller observes the grabbing state. Disconnect settles the local connection and GDP state before publishing status changes. If device Stop fails, `close(true)` reports that failure after disconnecting. A timed-out Stop is never resent during teardown.
 
 Parameter schema, data, and write methods perform synchronous REST requests. A GUI or latency-sensitive consumer must move those calls off its event thread and define its own timeout and cancellation behavior.
 
@@ -69,45 +73,19 @@ software-trigger REST routes from other Gocator SDK generations.
 | `Client`, managed `Resource`/`ResourceManager`, `SensorPath`, disconnect handlers | SDK infrastructure; arbitrary resource traversal, subscriptions, multi-sensor selection and automatic disconnect recovery are not exposed as consumer commands by this facade. |
 | Software trigger | No dedicated command in the supported `GoSystem` API. No inferred REST endpoint or simulated trigger is added. |
 
-The optional adapter exposes `IDeviceParameterControl` for the **System** scope:
-`runningState` is a read-only enumeration (`ready`, `running`, `conflict`), and
-`quickEditEnabled` is a read/write boolean. The existing GUI and callable path
-use the same core SDK functions. Targets contain a controller identity and
-connection generation; observations have revisions, and writes validate a fresh
-observation before SDK dispatch. Completion preserves actual readback, or an
-acknowledged/uncertain effect when the SDK or follow-up observation fails.
-The same adapter exposes `IDeviceConnectionControl` for discovery, connect and
-disconnect. Targets come from the cached discovery catalog; `targetId` is the
-sensor address and the model, serial and virtual flag are descriptive
-attributes. `connectionId` is a controller-scoped connection generation, so an
-id from an earlier connection is refused as stale. Discovery is refused while
-connected or grabbing. Single and Live use the standard lifecycle over the same
-acquisition facade: `device.single` calls `grab(1)` and completes after its
-frame is delivered, while `device.live-start`/`device.live-stop` call `grab()`
-and `stop()`. `source.start`/`source.stop` share that authority and never issue
-a second start. Single while Live is refused with
-"Stop Live before a single grab." and a second Single is refused while the first
-is in flight; neither refusal has an effect. Discovery, connect and disconnect
-share one module control gate between the Qt widget and callable clients, and
-one acquisition reservation serializes `source.start` with live start so neither
-issues a second grab. A busy gate refuses with `busy`, and the widget disables
-its controls while callable work runs.
+The optional adapter exposes `IDeviceParameterControl` for the **System** scope: `runningState` is a read-only enumeration (`ready`, `running`, `conflict`), and `quickEditEnabled` is a read/write boolean. The host device panel and callable path use the same core SDK functions. Targets contain a controller identity and connection generation; observations have revisions, and writes validate a fresh observation before SDK dispatch. Completion preserves actual readback, or an acknowledged/uncertain effect when the SDK or follow-up observation fails.
 
-Commands and Scanner/Sensor typed API targets remain explicitly unsupported;
-the existing Scanner/Sensor GUI resource editors remain available.
+The same adapter exposes `IDeviceConnectionControl` for discovery, connect and disconnect. Targets come from the cached discovery catalog; `targetId` is the sensor address for the default control port and `address:port` for a non-default port. The model, serial and virtual flag are descriptive attributes. A non-default control port is also published as an identity attribute because the Host hashes the full attribute set. A single default-port record with unchanged model, serial, virtual and address attributes keeps its previous stable ID; merging previously duplicate endpoint records can intentionally change or retire those IDs. Remote discovery entries without a usable control/GDP port are excluded. `connectionId` is a controller-scoped connection generation, so an id from an earlier connection is refused as stale. Discovery is refused while connected or grabbing. Single and Live use the standard lifecycle over the same acquisition facade: `device.single` calls `grab(1)` and completes after its frame is delivered, while `device.live-start`/`device.live-stop` call `grab()` and `stop()`. `source.start`/`source.stop` share that authority and never issue a second start. An already-running GoPxL system is reused without changing its existing GDP output configuration, so active Emulator replay does not produce a duplicate Start refusal or lose another client's outputs. The replay owner must provide a usable output, and local Single/Live stop leaves replay started by another client running. A local Start assumes exclusive control of GDP output configuration; clients that may start concurrently must attach to an already-running system instead. Single while Live is refused with "Stop Live before a single grab." and a second Single is refused while the first is in flight; neither refusal has an effect. Discovery, connect and disconnect share one module control gate for API-driven lifecycle operations, and one acquisition reservation serializes `source.start` with live start so neither issues a second grab. A busy gate refuses with `busy` and an explicit reason.
 
-Initial schemas, values and device labels are fetched on a worker. Only copied
-JSON updates the GUI. Requests arriving during a read are coalesced into a
-follow-up read, with schema rebuilds taking priority over value-only refreshes.
-The static System category remains present with unavailable values after an
-initial observation failure and can recover on a value refresh. System writes are serialized with connection destruction;
-this does not turn two remote SDK observations into an atomic device snapshot
-or establish a settings-to-frame fence. Structured arrays and unsupported schema
-types are not converted into speculative editors.
+Commands and Scanner/Sensor typed API targets remain explicitly unsupported; the existing Scanner/Sensor resource editors in the host device panel remain available.
 
-Acquisition output setup reports at most one operational failure per attempt. The optional package-wide diagnostic sink receives only the failed preparation, enable or registration stage; when no sink is installed, a concise warning names that stage. The SDK exception text and device identities are omitted from this observation. An output setup failure still allows GDP and start to proceed; the observation does not establish whether acquisition or frame delivery succeeded. An absent connection and the deliberately tolerated scan-mode and remove-all exceptions do not produce this event. The sink is copied when each session is created and its owner keeps it valid until sessions and producer work have stopped.
+Initial schemas, values and device labels are fetched on a worker. Only copied JSON updates the host device panel. Requests arriving during a read are coalesced into a follow-up read, with schema rebuilds taking priority over value-only refreshes. The static System category remains present with unavailable values after an initial observation failure and can recover on a value refresh. System writes are serialized with connection destruction; this does not turn two remote SDK observations into an atomic device snapshot or establish a settings-to-frame fence. Structured arrays and unsupported schema types are not converted into speculative editors.
 
-When a range is requested, the optional range sink reports the first rejected GDP range message and whether another message yielded a usable range. It distinguishes a dataset without a supported range message from an invalid input and a refused or misaligned destination. Single reports each observed failure. Live samples the first and every hundredth occurrence per reason in an acquisition. These observations are independent of output setup failures and detailed capture.
+Acquisition output setup reports at most one operational failure per attempt. The optional package-wide diagnostic sink receives only the failed preparation, enable or registration stage. A concise warning names the stage when no sink is installed. The observation omits SDK exception text and device identities. A source selection or state check failure aborts before the first output write. An enable or registration failure is observed and acquisition can continue with the existing outputs. The deliberately tolerated scan-mode and remove-all exceptions produce no observation. The module copies the sink when each session is created, and the owner keeps it valid until sessions and producer work have stopped.
+
+When a GoPxL PC instance or Emulator replays data without a scan engine, output setup selects one authoritative data source instead of a scanner output. It prefers profile range sources, falls back to surface range sources, and uses an image source only when no range source exists. The adapter publishes range-only when a dataset contains any range candidate; a damaged or storage-refused range does not fall back to an image in the same dataset. Only a dataset with no range candidate can publish an image-only `GraphicsFrame`. Common Mono, Bayer, RGB/BGR and RGBA/BGRA formats are supported; unsupported formats, including GEV 12-packed layouts that differ from PFNC, are refused. Word-aligned Mono and Bayer samples retain their declared bit width and alignment. Simultaneous image/range publication is tracked separately in [Playground issue #654](https://github.com/Minu-Park/Playground/issues/654). Discovered control ports are retained for address-based connections; an unknown address uses the GoPxL default control port, while an address with multiple non-default endpoints requires an explicit port.
+
+When a range is requested, the optional range sink reports the first rejected GDP range message and whether another message yielded a usable range. It distinguishes a dataset without a supported range message from an invalid input and a refused or misaligned destination. Surface sample arrays must match the reported grid. Auxiliary intensity with a different grid is omitted. Single reports each observed failure. Live samples the first and every hundredth occurrence per reason in an acquisition. These observations are independent of output setup failures and detailed capture.
 
 ## Validation
 

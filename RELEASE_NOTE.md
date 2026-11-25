@@ -1,5 +1,21 @@
 ## Unreleased
 
+- Complete Single only after the adapter hands off a usable frame and acquisition stops. Preserve Stop failures in the command result and release the local connection on Disconnect even when device Stop fails. Bind automatic finite-grab stops to their own acquisition.
+
+- Reject surface arrays that disagree with the declared grid and omit mismatched auxiliary intensity. Report the full required image extent for short rows and store only declared image rows.
+
+- Convert Gocator GDP image-only replay messages into owned GraphicsImage payloads for common Mono, Bayer, RGB/BGR and RGBA/BGRA formats, preserve word-aligned source bit widths, and report image rejection evidence through the device image diagnostics contract. GEV 12-packed layouts that differ from PFNC are refused rather than misdecoded.
+
+- Support GoPxL PC and Emulator replay jobs without scan engines by selecting one authoritative GDP output, preferring profile range sources, falling back to surface range sources, and using an image source only when no range source exists. Datasets with any range candidate publish range-only, and a damaged range candidate suppresses image fallback; simultaneous image/range publication is tracked in Playground issue #654.
+
+- Encode non-default control ports in connection target IDs, keep same-address PC instances and Emulators distinct, refuse ambiguous port-less targets, and exclude remote discovery entries without usable control/GDP ports.
+
+- Retain discovered control ports for address-based Gocator connections and keep the default port only for unknown targets.
+
+- Tolerate an already-running GoPxL system during acquisition start so Single and Live can attach to active Emulator replay without a duplicate Start refusal or output reconfiguration, while leaving replay started by another client running when local acquisition stops.
+
+- Cover replay-source selection, malformed data-source links, profile-first fallback, image-only fallback, packed and word-aligned image layouts, ambiguous targets, cached control-port resolution, and external replay ownership with focused tests.
+
 - Report GDP range assembly failures, destination storage failures, and retained range state through the optional range diagnostic sink.
 
 - Report acquisition output preparation failures by stage through the optional operational diagnostic sink, with a concise warning when no sink is installed.

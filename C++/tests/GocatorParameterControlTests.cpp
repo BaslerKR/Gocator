@@ -148,7 +148,7 @@ struct GocatorParameterTestAccess {
         };
         controller._lifecycleAvailable = true;
         controller._lifecycle.snapshot = [] {
-            return Gocator::ConnectionSnapshot{true, 3, "10.0.0.5"};
+            return Gocator::ConnectionSnapshot{true, 3, "10.0.0.5", "10.0.0.5"};
         };
     }
 };

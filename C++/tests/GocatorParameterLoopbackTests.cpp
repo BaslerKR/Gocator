@@ -87,7 +87,7 @@ struct Resources {
     QJsonObject scannerSchema;
     QJsonObject scannerData;
     std::vector<std::string> writes;
-    Gocator::ConnectionSnapshot snapshot{true, 4, "10.0.0.9"};
+    Gocator::ConnectionSnapshot snapshot{true, 4, "10.0.0.9", "10.0.0.9"};
     bool grabbing = false;
     std::size_t grabs = 0;
     std::size_t stops = 0;

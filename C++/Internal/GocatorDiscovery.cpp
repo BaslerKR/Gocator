@@ -60,7 +60,8 @@ GocatorConnectionConfig GocatorDeviceInfo::connectionConfig(int commandTimeoutMs
 
 bool GocatorDeviceInfo::canConnectLocally() const
 {
-    return !address.empty() && !addressConflict && !remote;
+    return !address.empty() && !addressConflict && !remote
+        && controlPort != 0U && gdpPort != 0U;
 }
 
 std::vector<GocatorDeviceInfo> GocatorDiscovery::discover(const GocatorDiscoveryOptions& options) const

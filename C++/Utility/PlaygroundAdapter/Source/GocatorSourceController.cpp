@@ -1,11 +1,11 @@
 #include "GocatorSourceController.h"
 #include <QUuid>
 #include <QtConcurrent>
-#include <set>
+#include <map>
 #include <stdexcept>
-#include <tuple>
 #include "engine/GraphicsFrame.h"
 #include "DeviceRuntime/Contract/SessionFrame.h"
+#include "Internal/GocatorSelection.h"
 #include "Utility/PlaygroundAdapter/GocatorGraphicsFrameStream.h"
 #include "Utility/PlaygroundAdapter/GocatorDataSetGraphicsFrameAdapter.h"
 
@@ -16,25 +16,68 @@ DeviceConnectionResult refused(DeviceConnectionError error, std::string message)
     return {error, std::move(message)};
 }
 
+DeviceImageRejection deviceImageRejection(const GraphicsImageFailure reason)
+{
+    switch (reason) {
+    case GraphicsImageFailure::None: return DeviceImageRejection::NoImage;
+    case GraphicsImageFailure::MissingBytes: return DeviceImageRejection::MissingBytes;
+    case GraphicsImageFailure::InvalidDimensions: return DeviceImageRejection::InvalidDimensions;
+    case GraphicsImageFailure::UnsupportedFormat: return DeviceImageRejection::UnsupportedFormat;
+    case GraphicsImageFailure::InvalidStride: return DeviceImageRejection::InvalidStride;
+    case GraphicsImageFailure::StrideBelowMinimum: return DeviceImageRejection::StrideBelowMinimum;
+    case GraphicsImageFailure::ExtentOverflow: return DeviceImageRejection::ExtentOverflow;
+    case GraphicsImageFailure::TruncatedBytes: return DeviceImageRejection::TruncatedBytes;
+    case GraphicsImageFailure::OddWidth: return DeviceImageRejection::OddWidth;
+    case GraphicsImageFailure::UnsupportedConversion: return DeviceImageRejection::UnsupportedConversion;
+    case GraphicsImageFailure::ExcessBytes: return DeviceImageRejection::InvalidStride;
+    case GraphicsImageFailure::StorageRefused: return DeviceImageRejection::StorageRefused;
+    }
+    return DeviceImageRejection::NoImage;
+}
+
+std::vector<Gocator::DeviceInfo> normalizedDevices(const std::vector<Gocator::DeviceInfo>& devices)
+{
+    std::vector<Gocator::DeviceInfo> uniqueDevices;
+    uniqueDevices.reserve(devices.size());
+    std::map<std::string, std::size_t> reported;
+    for (const auto& device : devices) {
+        if (device.controlPort == 0) continue;
+        const auto targetId = gocator::targetIdForDevice(device);
+        const auto [entry, inserted] = reported.emplace(targetId, uniqueDevices.size());
+        if (inserted) {
+            uniqueDevices.push_back(device);
+            continue;
+        }
+        auto& existing = uniqueDevices[entry->second];
+        if (existing.model.empty() && !device.model.empty()) existing.model = device.model;
+        if ((existing.serial.empty() || existing.serial == "0")
+            && !device.serial.empty() && device.serial != "0")
+            existing.serial = device.serial;
+        if (existing.isVirtual && !device.isVirtual) existing.isVirtual = false;
+    }
+    return uniqueDevices;
+}
+
 DeviceConnectionTargets copiedTargets(const std::vector<Gocator::DeviceInfo>& devices)
 {
+    const auto uniqueDevices = normalizedDevices(devices);
     DeviceConnectionTargets result;
-    result.targets.reserve(devices.size());
-    std::set<std::tuple<std::string, std::string, std::string, bool>> reported;
-    for (const auto& device : devices) {
-        const auto identity = std::make_tuple(device.address, device.model, device.serial, device.isVirtual);
-        if (!reported.insert(identity).second) continue;
+    result.targets.reserve(uniqueDevices.size());
+    for (const auto& device : uniqueDevices) {
+        const auto targetId = gocator::targetIdForDevice(device);
         std::vector<DeviceConnectionAttribute> attributes{
             {"model", device.model},
             {"serial", device.serial},
             {"virtual", device.isVirtual ? "true" : "false"}};
+        if (device.controlPort != gocator::kDefaultControlPort)
+            attributes.push_back({"controlPort", std::to_string(device.controlPort)});
         // A virtual or serial-less device has no stable serial, so its index-free address is the
         // identity attribute that keeps distinct sensors apart in the Host's stable inventory.
         // Real sensors keep the serial-based identity so a DHCP address change does not rename them.
         if (device.isVirtual || device.serial.empty() || device.serial == "0")
             attributes.push_back({"address", device.address});
-        result.targets.push_back({device.address,
-            Gocator::formatDeviceName(device.model, device.serial, device.address, device.isVirtual),
+        result.targets.push_back({targetId,
+            Gocator::formatDeviceName(device.model, device.serial, targetId, device.isVirtual),
             std::move(attributes)});
     }
     return result;
@@ -49,12 +92,14 @@ void completeConnection(const Callback& callback, Value value)
 } // namespace
 
 GocatorSourceController::GocatorSourceController(Gocator* gocator, QObject* parent,
-                                                 DeviceRangeRejectionSink rangeRejectionSink)
+                                                 DeviceRangeRejectionSink rangeRejectionSink,
+                                                 DeviceImageRejectionSink imageRejectionSink)
     : AbstractSourceController(parent),
       _notifications([this](const std::string& connectionId, const std::string& subscriptionId) {
           return snapshotChange(connectionId, subscriptionId);
       }),
-      _gocator(gocator), _rangeRejectionSink(rangeRejectionSink) {
+      _gocator(gocator), _rangeRejectionSink(rangeRejectionSink),
+      _imageRejectionSink(imageRejectionSink) {
     _parameterIdentity = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     _readSystem = [gocator] { return gocator->systemState(); };
     _writeQuickEdit = [gocator](bool enabled, std::optional<Gocator::SystemState> expected) {
@@ -79,15 +124,11 @@ GocatorSourceController::GocatorSourceController(Gocator* gocator, QObject* pare
         _lifecycle.open = [gocator](const std::string& targetId, std::string* error) {
             return gocator->open(targetId, error);
         };
-        _lifecycle.close = [gocator] { gocator->close(); };
+        _lifecycle.close = [gocator] { gocator->close(true); };
         _lifecycle.beginControl = [gocator] { return gocator->tryBeginControl(); };
         _lifecycle.endControl = [gocator] { gocator->endControl(); };
         _lifecycle.diagnostics = [gocator] { return gocator->runtimeDiagnostics(); };
-        _lifecycle.grab = [gocator](std::size_t frames) {
-            if (!gocator->isOpened() || gocator->isGrabbing()) return false;
-            gocator->grab(frames);
-            return gocator->isGrabbing();
-        };
+        _lifecycle.grab = [gocator](std::size_t frames) { return gocator->grab(frames); };
         _lifecycle.stop = [gocator] { gocator->stop(); };
     }
     registerCallbacks();
@@ -97,8 +138,13 @@ GocatorSourceController::~GocatorSourceController() {
     stopObservationThread();
     _notifications.close();
     _parameterWork.waitForFinished();
-    // Stop first so a pending single observes the explicit stop instead of its bounded timeout.
-    stop();
+    try {
+        stop();
+    } catch (const std::exception& error) {
+        Gocator::syslog(std::string("Gocator session stop failed during teardown: ") + error.what(), true);
+    } catch (...) {
+        Gocator::syslog("Gocator session stop failed during teardown with an unknown error.", true);
+    }
     _controlWork.waitForFinished();
     deregisterCallbacks();
 }
@@ -168,11 +214,12 @@ bool GocatorSourceController::beginGrab(std::size_t frames) {
     if (_rangeRejectionSink) {
         for (auto& count : _rangeRejections) count.store(0, std::memory_order_relaxed);
     }
+    if (_imageRejectionSink) {
+        for (auto& count : _imageRejections) count.store(0, std::memory_order_relaxed);
+    }
     if (_lifecycle.grab) return _lifecycle.grab(frames);
     if (!_gocator) return false;
-    if (_gocator->isGrabbing()) return false;
-    _gocator->grab(frames);
-    return _gocator->isGrabbing();
+    return _gocator->grab(frames);
 }
 
 void GocatorSourceController::noteAcquisitionFrame() {
@@ -240,7 +287,10 @@ void GocatorSourceController::registerCallbacks() {
     if (!_gocator) return;
 
     // 1. Status callback
-    _statusCallbackId = _gocator->registerStatusCallback([this](Gocator::Status status, bool on) {
+    _statusCallbackId = _gocator->registerStatusCallback(
+        [this, token = _statusCallbackGate.token()](Gocator::Status status, bool on) {
+        GraphicsFrameCallbackGate::Lease lease(token);
+        if (!lease) return;
         if (status == Gocator::GrabbingStatus) {
             _isGrabbing = on;
             if (!on) noteAcquisitionEnded();
@@ -268,6 +318,12 @@ void GocatorSourceController::registerCallbacks() {
             reportRangeRejection(rejection, sequence);
         };
     }
+    GocatorGraphicsFrameStream::RejectedImage rejectedImage;
+    if (_imageRejectionSink) {
+        rejectedImage = [this](const GocatorImageRejection& rejection, const std::size_t sequence) {
+            reportImageRejection(rejection, sequence);
+        };
+    }
     _graphicsStream = std::make_unique<GocatorGraphicsFrameStream>(
         _gocator,
         [this](GraphicsFrame&& payload, const unsigned int sourceIndex) {
@@ -276,13 +332,9 @@ void GocatorSourceController::registerCallbacks() {
             frame.payload = std::move(payload);
             frame.frameSeq = _frameSeq.fetch_add(1, std::memory_order_relaxed);
             _frameConsumer(std::move(frame), sourceIndex);
-        }, std::move(rejectedRange));
+            noteAcquisitionFrame();
+        }, std::move(rejectedRange), std::move(rejectedImage));
     if (_frameStorage) _graphicsStream->setFrameStorage(frameStorageFunction(_frameStorage));
-
-    // A single completes only after the producer delivered its one frame. Keep the observation
-    // separate from the graphics stream so a conversion result cannot hide the delivery.
-    _singleCallbackId = _gocator->registerGrabCallback(
-        [this](const GoPxLSdk::GoDataSet&, std::size_t) { noteAcquisitionFrame(); });
 }
 
 void GocatorSourceController::reportRangeRejection(
@@ -313,24 +365,48 @@ void GocatorSourceController::reportRangeRejection(
     observation.height = rejection.height;
     observation.frameSequence = frameSequence;
     observation.requestedStorageBytes = rejection.requestedStorageBytes;
-    observation.frameRetained = observation.rangeRetained = rejection.rangeRetained;
+    observation.frameRetained = rejection.frameRetained;
+    observation.imageRetained = rejection.imageRetained;
+    observation.rangeRetained = rejection.rangeRetained;
     _rangeRejectionSink(observation);
+}
+
+void GocatorSourceController::reportImageRejection(
+    const GocatorImageRejection& rejection, const std::size_t frameSequence) noexcept
+{
+    if (!_imageRejectionSink) return;
+    const auto reason = deviceImageRejection(rejection.reason);
+    const bool single = _singleInFlight.load(std::memory_order_relaxed);
+    auto& counter = _imageRejections[static_cast<std::size_t>(reason)];
+    const auto count = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (!single && count != 1 && count % 100 != 0) return;
+
+    DeviceImageRejectionObservation observation;
+    observation.reason = reason;
+    observation.conversion = DeviceImageConversion::Copy;
+    observation.sourceIndex = 0U;
+    observation.width = rejection.width;
+    observation.height = rejection.height;
+    observation.frameSequence = frameSequence;
+    observation.pixelFormat = rejection.pixelFormat;
+    observation.reportedStride = rejection.reportedStride;
+    observation.effectiveStride = rejection.effectiveStride;
+    observation.minimumRowBytes = rejection.minimumRowBytes;
+    observation.readableBytes = rejection.readableBytes;
+    observation.requiredBytes = rejection.requiredBytes;
+    _imageRejectionSink(observation);
 }
 
 void GocatorSourceController::deregisterCallbacks() {
     if (!_gocator) return;
 
-    _graphicsStream.reset();
-
-    if (_singleCallbackId != 0) {
-        _gocator->deregisterGrabCallback(_singleCallbackId);
-        _singleCallbackId = 0;
-    }
-
+    _statusCallbackGate.beginShutdown();
     if (_statusCallbackId != 0) {
         _gocator->deregisterStatusCallback(_statusCallbackId);
         _statusCallbackId = 0;
     }
+    _statusCallbackGate.waitForDrain();
+    _graphicsStream.reset();
 }
 
 std::optional<SourceRuntimeDiagnostics> GocatorSourceController::sourceRuntimeDiagnostics(unsigned sourceIndex) const
@@ -352,12 +428,12 @@ DeviceConnectionState GocatorSourceController::connectionState() const
 
     state.connected = true;
     state.connectionId = currentConnectionId(snapshot.generation);
-    state.targetId = snapshot.address;
+    state.targetId = snapshot.targetId;
     state.live = diagnostics.grabbing;
-    const auto target = cachedTarget(snapshot.address);
+    const auto target = cachedTarget(state.targetId);
     state.displayName = target
-        ? Gocator::formatDeviceName(target->model, target->serial, target->address, target->isVirtual)
-        : snapshot.address;
+        ? Gocator::formatDeviceName(target->model, target->serial, state.targetId, target->isVirtual)
+        : state.targetId;
     return state;
 }
 
@@ -369,8 +445,8 @@ std::string GocatorSourceController::currentConnectionId(std::uint64_t generatio
 std::optional<Gocator::DeviceInfo> GocatorSourceController::cachedTarget(const std::string& targetId) const
 {
     if (!_lifecycle.cachedDevices) return std::nullopt;
-    for (const auto& device : _lifecycle.cachedDevices())
-        if (device.address == targetId) return device;
+    for (const auto& device : normalizedDevices(_lifecycle.cachedDevices()))
+        if (gocator::targetIdForDevice(device) == targetId) return device;
     return std::nullopt;
 }
 
@@ -479,7 +555,7 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
         if (snapshot.opened)
             return refused(DeviceConnectionError::Conflict, "Disconnect before connecting another device.");
         if (argument.empty() || argument.find('\0') != std::string::npos)
-            return refused(DeviceConnectionError::InvalidArgument, "An exact address is required.");
+            return refused(DeviceConnectionError::InvalidArgument, "An exact target is required.");
         if (acquiring)
             return refused(DeviceConnectionError::Busy, "Stop live acquisition before connecting.");
     } else {
@@ -573,11 +649,9 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
                         : DeviceConnectionResult{{}, {}, DeviceConnectionEffect::Applied, copiedState()};
                 } else if (operation == Lifecycle::Single) {
                     bool stopped = false;
-                    bool delivered = false;
                     {
                         std::lock_guard<std::mutex> lock(singleRun->mutex);
                         stopped = singleRun->stopped;
-                        delivered = singleRun->delivered;
                     }
                     bool started = false;
                     if (!stopped) {
@@ -589,51 +663,43 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
                         }
                     }
                     _acquisitionStarting = false;
+                    bool delivered = false;
+                    bool ended = false;
                     {
-                        std::lock_guard<std::mutex> lock(singleRun->mutex);
+                        std::unique_lock<std::mutex> lock(singleRun->mutex);
+                        if (started || singleRun->delivered)
+                            singleRun->condition.wait_for(lock, std::chrono::seconds(30),
+                                [&] { return singleRun->ended || singleRun->stopped; });
                         stopped = singleRun->stopped;
                         delivered = singleRun->delivered;
+                        ended = singleRun->ended;
                     }
-                    if (stopped) {
-                        // source.stop reached us before or during the producer start; stop again in
-                        // case the start landed after the earlier stop and report the stopped run.
-                        if (started) stop();
-                        result = delivered
-                            ? DeviceConnectionResult{{}, {}, DeviceConnectionEffect::Applied, copiedState()}
-                            : DeviceConnectionResult{DeviceConnectionError::BackendFailure,
-                                "Single acquisition was stopped before a frame was delivered.",
-                                started ? DeviceConnectionEffect::Applied : DeviceConnectionEffect::None,
-                                copiedState()};
-                    } else if (!started && !delivered) {
+                    if (stopped && started && !ended) stop();
+                    if (!started && !delivered && !ended && !stopped) {
                         result = {DeviceConnectionError::Unavailable,
                             "The Gocator could not start a single grab.",
                             DeviceConnectionEffect::None, copiedState()};
+                    } else if (!ended && !stopped) {
+                        stop();
+                        result = {DeviceConnectionError::Timeout,
+                            "Single acquisition did not finish within 30 s; accepted effects may have occurred.",
+                            DeviceConnectionEffect::Applied, copiedState()};
                     } else {
-                        bool ended = false;
-                        {
-                            std::unique_lock<std::mutex> lock(singleRun->mutex);
-                            const bool finished = singleRun->condition.wait_for(lock, std::chrono::seconds(30),
-                                [&] { return singleRun->ended || singleRun->stopped; });
-                            delivered = singleRun->delivered;
-                            ended = singleRun->ended;
-                            stopped = singleRun->stopped;
-                            if (!finished) {
-                                lock.unlock();
-                                stop();
-                                result = {DeviceConnectionError::Timeout,
-                                    "Single acquisition did not finish within 30 s; accepted effects may have occurred.",
-                                    DeviceConnectionEffect::Applied, copiedState()};
-                            }
-                        }
-                        if (result.error == DeviceConnectionError::None) {
-                            if (!delivered) {
-                                result = {DeviceConnectionError::BackendFailure,
+                        const auto diagnostics = _lifecycle.diagnostics
+                            ? _lifecycle.diagnostics() : GocatorRuntimeDiagnostics{};
+                        const bool acquisitionOccurred = started || delivered || ended;
+                        if (acquisitionOccurred && diagnostics.stopFailed) {
+                            result = {DeviceConnectionError::BackendFailure,
+                                diagnostics.stopError.empty() ? "Gocator stop failed." : diagnostics.stopError,
+                                DeviceConnectionEffect::Unknown, copiedState()};
+                        } else {
+                            result = delivered
+                                ? DeviceConnectionResult{{}, {}, DeviceConnectionEffect::Applied, copiedState()}
+                                : DeviceConnectionResult{DeviceConnectionError::BackendFailure,
                                     stopped ? "Single acquisition was stopped before a frame was delivered."
                                             : "Single acquisition ended without delivering a frame.",
-                                    DeviceConnectionEffect::Applied, copiedState()};
-                            } else if (ended || stopped) {
-                                result = {{}, {}, DeviceConnectionEffect::Applied, copiedState()};
-                            }
+                                    acquisitionOccurred ? DeviceConnectionEffect::Applied : DeviceConnectionEffect::None,
+                                    copiedState()};
                         }
                     }
                 } else if (operation == Lifecycle::LiveStart) {
@@ -649,9 +715,13 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
             } catch (const std::exception& error) {
                 if (operation == Lifecycle::Discover)
                     discovered.result = refused(DeviceConnectionError::BackendFailure, error.what());
-                else
+                else {
+                    const auto* grabError = dynamic_cast<const Gocator::GrabError*>(&error);
                     result = {DeviceConnectionError::BackendFailure, error.what(),
-                        DeviceConnectionEffect::Unknown, copiedState()};
+                        grabError && !grabError->mayHaveEffect()
+                            ? DeviceConnectionEffect::None : DeviceConnectionEffect::Unknown,
+                        copiedState()};
+                }
             } catch (...) {
                 if (operation == Lifecycle::Discover)
                     discovered.result = refused(DeviceConnectionError::BackendFailure,
