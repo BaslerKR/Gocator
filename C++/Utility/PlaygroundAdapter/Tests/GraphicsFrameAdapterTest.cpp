@@ -344,10 +344,10 @@ std::shared_ptr<GoPxLSdk::GoGdpStamp> stamp(const k64u frameIndex)
 }
 
 /** The calibrated surface used by the Playground 3D codec parity fixture. */
-void expectCalibratedSurface(const GraphicsFrame& converted)
+void expectCalibratedSurface(const GraphicsFrame& converted, const bool withImage = false)
 {
     assert(converted.ranges.size() == 1U);
-    assert(converted.images.empty());
+    assert(withImage ? converted.images.size() == 1U : converted.images.empty());
     assert(converted.pointClouds.empty());
     assert(converted.surfaces.empty());
     assert(converted.ranges.front().descriptor.id == "range");
@@ -965,7 +965,7 @@ int main()
         assert(reinterpret_cast<const std::uint8_t*>(planned.payload.zValues.data())
             == storage.block.get() + storage.plan.ranges[0].offset);
         assert(plannedImage.payload.data()[3] == 255U);
-        expectCalibratedSurface(*converted);
+        expectCalibratedSurface(*converted, true);
         const auto& imageShape = storage.shape.images.front();
         assert(imageShape.descriptor.id == plannedImage.descriptor.id
             && imageShape.descriptor.displayName == plannedImage.descriptor.displayName
