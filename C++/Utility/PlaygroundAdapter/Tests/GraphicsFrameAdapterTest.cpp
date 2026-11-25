@@ -937,7 +937,7 @@ int main()
         auto& storage = *storageHolder;
         adapter.setFrameStorageProvider(storageHolder);
         GoPxLSdk::GoDataSet dataSet;
-        dataSet.Add(stamp(11));
+        dataSet.Add(stamp(42));
         auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
         GoGdpMsgTests::setImage(*image, 2, 2, GoPxLSdk::GoGdpPixelFormat::Mono8,
             std::vector<k8u>{0, 64, 128, 255});
