@@ -8,7 +8,7 @@
 
 - Support GoPxL PC and Emulator replay jobs without scan engines by selecting one authoritative GDP output, preferring profile range sources, falling back to surface range sources, and using an image source only when no range source exists. Datasets with any range candidate publish range-only, and a damaged range candidate suppresses image fallback; simultaneous image/range publication is tracked in Playground issue #654.
 
-- Encode non-default control ports in connection target IDs, keep same-address PC instances and Emulators distinct, refuse ambiguous port-less targets, and exclude remote discovery entries without usable control/GDP ports.
+- Encode non-default control ports in connection target IDs, keep same-address PC instances and Emulators distinct, refuse ambiguous port-less targets, and list only local discovery entries with an address, usable control and GDP ports, and no address conflict. Log every reported device.
 
 - Retain discovered control ports for address-based Gocator connections and keep the default port only for unknown targets.
 

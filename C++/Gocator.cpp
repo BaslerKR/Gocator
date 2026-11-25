@@ -856,11 +856,8 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices(std::string* error)
         bool hasConnectableDevice = false;
         for (const auto& device : devices)
         {
-            if (device.canConnectLocally())
-            {
-                hasConnectableDevice = true;
-                break;
-            }
+            syslog(deviceSummary(device));
+            if (device.canConnectLocally()) hasConnectableDevice = true;
         }
 
         // If no usable device was found, try classic discovery for older G2/G3 sensors
@@ -880,13 +877,13 @@ std::vector<Gocator::DeviceInfo> Gocator::discoverDevices(std::string* error)
                 devices.clear();
             }
             syslog("Gocator classic discovery found " + std::to_string(devices.size()) + " device(s).");
+            for (const auto& device : devices) syslog(deviceSummary(device));
         }
 
         result.reserve(devices.size());
         for (const auto& d : devices)
         {
             if (!d.canConnectLocally()) continue;
-            syslog(deviceSummary(d));
             bool isVirt = (d.serialNumber == 0 || d.deviceModel.empty() || d.webPort == 8100);
             result.push_back({d.address, d.deviceModel, std::to_string(d.serialNumber), isVirt,
                 d.controlPort});

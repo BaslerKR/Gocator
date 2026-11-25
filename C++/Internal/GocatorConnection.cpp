@@ -206,41 +206,6 @@ void GocatorConnection::stopNoThrow() noexcept
     try { stop(); } catch (...) {}
 }
 
-GocatorStopResult GocatorConnection::stopIfRunning()
-{
-    std::lock_guard<std::mutex> lock(startMutex_);
-    if (startOwnership_.stopUncertain()) return GocatorStopResult::Uncertain;
-    lastOperationError_.clear();
-    try {
-        if (control_->runningState() != GoPxLSdk::GoSystem::State::Running)
-            return GocatorStopResult::NotRunning;
-    } catch (const GoPxLSdk::GoChannelError& error) {
-        lastOperationError_ = error.what();
-        return GocatorStopResult::StateUnknown;
-    } catch (const std::exception& error) {
-        lastOperationError_ = error.what();
-        return GocatorStopResult::Refused;
-    } catch (...) {
-        lastOperationError_ = "Gocator state query failed with an unknown error.";
-        return GocatorStopResult::Refused;
-    }
-    try {
-        control_->stop();
-        (void)startOwnership_.end();
-        return GocatorStopResult::Stopped;
-    } catch (const GoPxLSdk::GoChannelError& error) {
-        lastOperationError_ = error.what();
-        if (startOwnership_.started()) startOwnership_.markStopUncertain();
-        return GocatorStopResult::Uncertain;
-    } catch (const std::exception& error) {
-        lastOperationError_ = error.what();
-        return GocatorStopResult::Refused;
-    } catch (...) {
-        lastOperationError_ = "Gocator stop failed with an unknown error.";
-        return GocatorStopResult::Refused;
-    }
-}
-
 std::string GocatorConnection::lastOperationError() const
 {
     std::lock_guard<std::mutex> lock(startMutex_);

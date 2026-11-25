@@ -67,7 +67,7 @@ public:
     GoPxLSdk::GoJson schema(const std::string& path);
 
     ScannerInfo detectPrimaryScanner();
-    void stopIfRunning();
+    void stopIfRunning() noexcept;
     void enableGocatorProtocol(bool enabled);
     void clearGocatorOutputs();
     void addOutput(const std::string& sourceId, int outputId = 0, bool autoShift = true);

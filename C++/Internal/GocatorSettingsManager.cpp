@@ -132,12 +132,9 @@ ScannerInfo GocatorSettingsManager::detectPrimaryScanner()
     return info;
 }
 
-void GocatorSettingsManager::stopIfRunning()
+void GocatorSettingsManager::stopIfRunning() noexcept
 {
-    const auto result = connection_.stopIfRunning();
-    if (result == GocatorStopResult::Refused || result == GocatorStopResult::StateUnknown
-        || result == GocatorStopResult::Uncertain)
-        throw std::runtime_error(connection_.lastOperationError());
+    connection_.stopNoThrow();
 }
 
 void GocatorSettingsManager::enableGocatorProtocol(bool enabled)

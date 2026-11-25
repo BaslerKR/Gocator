@@ -67,7 +67,7 @@ private slots:
     void stopTimeoutRetainsOwnershipAndBlocksAttach();
     void uncertainStopClearsOnlyAfterObservedStop();
     void attachNeverStarts();
-    void stopIfRunningReportsFailures();
+    void attachedReplayIsNeverStopped();
 };
 
 void GocatorConnectionStateTests::confirmedStartAndAlreadyRunning()
@@ -166,18 +166,17 @@ void GocatorConnectionStateTests::attachNeverStarts()
     QCOMPARE(pointer->starts, 0);
 }
 
-void GocatorConnectionStateTests::stopIfRunningReportsFailures()
+void GocatorConnectionStateTests::attachedReplayIsNeverStopped()
 {
     auto fake = control();
     auto* pointer = fake.get();
     pointer->state = GoPxLSdk::GoSystem::State::Running;
-    pointer->stopTimeout = true;
     gocator::GocatorConnection connection(config(), std::move(fake));
-    QCOMPARE(connection.stopIfRunning(), gocator::GocatorStopResult::Uncertain);
-    QCOMPARE(pointer->stops, 1);
-    pointer->stateTimeout = true;
-    QCOMPARE(connection.stopIfRunning(), gocator::GocatorStopResult::StateUnknown);
-    QCOMPARE(pointer->stops, 1);
+    connection.attachToRunning();
+    QCOMPARE(connection.tryStop(), gocator::GocatorStopResult::NotOwned);
+    connection.stopNoThrow();
+    connection.disconnect();
+    QCOMPARE(pointer->stops, 0);
 }
 
 QTEST_APPLESS_MAIN(GocatorConnectionStateTests)

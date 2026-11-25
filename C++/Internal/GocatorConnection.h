@@ -21,7 +21,7 @@ enum class GocatorStartResult {
     Started, AlreadyRunning, Refused, StateUnknown, StartUncertain, PriorStopUncertain
 };
 enum class GocatorStopResult {
-    Stopped, NotRunning, NotOwned, Refused, StateUnknown, Uncertain
+    Stopped, NotOwned, Refused, Uncertain
 };
 
 class GocatorConnection
@@ -47,7 +47,6 @@ public:
     void stop();
     GocatorStopResult tryStop();
     void stopNoThrow() noexcept;
-    GocatorStopResult stopIfRunning();
     std::string lastOperationError() const;
 
     std::uint16_t controlPort() const noexcept;
