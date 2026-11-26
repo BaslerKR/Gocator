@@ -33,7 +33,7 @@ template<class Read>
         if (sensors.Size() == 0U) return {std::nullopt, false};
         const auto sensor = sensors.At("/0");
         if (!sensor.IsString("/engineId")) return {std::nullopt, true};
-        const auto engineId = sensor.At("/engineId").Get<std::string>();
+        const auto engineId = sensor.At("/engineId").template Get<std::string>();
         if (engineId.empty()) return {std::nullopt, true};
         return {engineId, false};
     } catch (...) {
@@ -100,12 +100,12 @@ template<class Read>
         const auto item = items.At(static_cast<int>(index));
         if (!item.IsString("/_links/self/href"))
             throw std::runtime_error("Malformed Gocator data source link.");
-        const auto id = dataSourceIdFromLink(item.At("/_links/self/href").Get<std::string>());
+        const auto id = dataSourceIdFromLink(item.At("/_links/self/href").template Get<std::string>());
         if (id.empty()) throw std::runtime_error("Malformed Gocator data source link.");
         const auto data = read("/dataSources/" + id);
         if (!data.IsInteger("/dataFormat/type"))
             throw std::runtime_error("Malformed Gocator data source format.");
-        const int type = data.At("/dataFormat/type").Get<int>();
+        const int type = data.At("/dataFormat/type").template Get<int>();
         if (type < 0 || type > (std::numeric_limits<std::uint16_t>::max)())
             throw std::runtime_error("Unsupported Gocator data source format value.");
         sources.push_back({id, static_cast<GoPxLSdk::MessageType>(type)});

@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Mark dependent `GoJson::Get<T>()` calls in the data-source helpers with `template` so the plugin compiles with Apple clang 21, which rejects the unmarked form.
+
 - Plan a Gocator frame's range and image as one frame-storage request through the Playground `IFrameStorageProvider::acquireFrame()` contract, so a frame with both components is written once into one worker slot and published in place with a single admission. The adapter requires `Playground::DeviceRuntimeContract` and the frame-storage interface version 2.0.
 
 - Complete Single only after the adapter hands off a usable frame and acquisition stops. Preserve Stop failures in the command result and release the local connection on Disconnect even when device Stop fails. Bind automatic finite-grab stops to their own acquisition.
