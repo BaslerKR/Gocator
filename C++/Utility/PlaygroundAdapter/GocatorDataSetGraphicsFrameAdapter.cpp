@@ -204,7 +204,7 @@ void writeArray2Intensity(const kArray2 intensities,
     return {};
 }
 
-void applyFrameMetadata(GraphicsFrame& result,
+void applyFrameMetadata(GraphicsFrameContent& result,
                         const GoPxLSdk::GoGdpMsg& msg,
                         const StampInfo& stamp)
 {
@@ -452,13 +452,6 @@ struct ImagePlanResult
     return source;
 }
 
-[[nodiscard]] std::optional<GraphicsImage> convertImage(
-    const ImageLayout& layout, const kArray2 pixels, const GraphicsImageStorage& storage,
-    GraphicsImageFailure* failure = nullptr)
-{
-    return writeGraphicsImageWithFailure(imageWriterSource(layout, pixels), storage, failure);
-}
-
 using RangeReason = GocatorRangeRejection::Reason;
 
 std::nullopt_t rejectRange(GocatorRangeRejection* rejection, const RangeReason reason,
@@ -503,9 +496,9 @@ struct RangeConversion
 };
 
 [[nodiscard]] std::optional<RangeFrame> writeRange(
-    RangeConversion conversion, const GraphicsImageStorage& storage, GocatorRangeRejection* rejection)
+    RangeConversion conversion, GraphicsFrameBuilder& builder, GocatorRangeRejection* rejection)
 {
-    GraphicsRangeFrameWriter writer(conversion.layout, storage);
+    GraphicsRangeFrameWriter writer(builder, conversion.layout);
     if (!writer.isValid())
     {
         return rejectRangeStorage(rejection, writer, conversion.width, conversion.height);
@@ -782,11 +775,12 @@ void GocatorDataSetGraphicsFrameAdapter::setFrameStorageProvider(std::shared_ptr
 
 std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertFrameWithRejection(
     const GoPxLSdk::GoDataSet& dataSet, const GraphicsFrameRequest& request,
-    GocatorRangeRejection& rejection, GocatorImageRejection* imageRejection) const
+    GocatorRangeRejection& rejection, GocatorImageRejection* imageRejection,
+    std::optional<std::uint64_t> frameIndex) const
 {
     rejection = {};
     if (imageRejection) *imageRejection = {};
-    auto frame = convertGraphicsFrame(dataSet, request, &rejection, imageRejection);
+    auto frame = convertGraphicsFrame(dataSet, request, &rejection, imageRejection, frameIndex);
     if (!frame || !frame->isValid()) return std::nullopt;
     rejection.frameRetained = true;
     rejection.imageRetained = frame->hasImage();
@@ -799,7 +793,8 @@ std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphics
     const GoPxLSdk::GoDataSet& dataSet,
     const GraphicsFrameRequest& request,
     GocatorRangeRejection* rejection,
-    GocatorImageRejection* imageRejection) const
+    GocatorImageRejection* imageRejection,
+    std::optional<std::uint64_t> frameIndex) const
 {
     const bool wantsRange = hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range);
     const bool wantsImage = hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Image);
@@ -943,19 +938,19 @@ std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphics
 
     // Descriptors, names and metadata are final before planning, so the frame serializes exactly
     // as the plan assumed.
-    GraphicsFrame result;
+    GraphicsFrameContent plannedContent;
+    auto& result = plannedContent;
     if (rangePlan) result.addRange("range", RangeFrame{}, "Range", "primary");
     if (imageLayout) {
         result.addImage("image", GraphicsImage{}, "Image", "primary");
         result.images.back().descriptor.registration = GraphicsImageRegistration::Unregistered;
     }
     applyFrameMetadata(result, rangePlan ? *rangeMessage : *imageMessage, stamp);
+    if (frameIndex) result.metadata.frameIndex = *frameIndex;
 
     GraphicsImageWriterSource imageSource;
     if (imageLayout) imageSource = imageWriterSource(*imageLayout, imageMessage->Pixels());
 
-    GraphicsImageStorage imageStorage;
-    GraphicsImageStorage rangeStorage;
     FrameStoragePlan storagePlan;
     if (provider) {
         FrameStorageShape shape;
@@ -991,24 +986,26 @@ std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphics
             }
             return std::nullopt;
         }
-        std::size_t block = 0;
-        if (imageLayout) imageStorage = frameStorageBlockFunction(storagePlan, storagePlan.images[block]);
-        if (rangePlan) rangeStorage = frameStorageBlockFunction(storagePlan, storagePlan.ranges[0]);
     }
+
+    auto context = provider ? frameStoragePlanContext(storagePlan) : GraphicsFrameContext::local();
+    GraphicsFrameBuilder builder(context);
+    builder.content() = std::move(plannedContent);
+    auto& content = builder.content();
 
     if (imageLayout) {
         GraphicsImageFailure failure = GraphicsImageFailure::None;
-        auto converted = writeGraphicsImageWithFailure(imageSource, imageStorage, &failure);
+        auto converted = writeGraphicsImageWithFailure(builder, imageSource, &failure);
         if (!converted.isValid()) {
             reportImageFailure(*imageMessage, failure, &*imageLayout);
             return std::nullopt;
         }
-        result.images.back().payload = std::move(converted);
+        content.images.back().payload = std::move(converted);
     }
     if (rangePlan) {
         GocatorRangeRejection evidence;
         evidence.partCount = partCount;
-        auto range = writeRange(std::move(*rangePlan), rangeStorage, &evidence);
+        auto range = writeRange(std::move(*rangePlan), builder, &evidence);
         if (!range) {
             if (rejection) {
                 *rejection = evidence;
@@ -1016,7 +1013,18 @@ std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphics
             }
             return std::nullopt;
         }
-        result.ranges.back().payload = std::move(*range);
+        content.ranges.back().payload = std::move(*range);
     }
-    return result;
+    auto published = std::move(builder).publish();
+    if (!published) {
+        if (rangePlan && rejection) {
+            rejection->reason = RangeReason::StorageRefused;
+            rejection->part = static_cast<std::uint32_t>(rangeIndex);
+            rejection->requestedStorageBytes = storagePlan.totalBytes;
+        } else if (imageLayout) {
+            reportImageFailure(*imageMessage, GraphicsImageFailure::StorageRefused, &*imageLayout);
+        }
+        return std::nullopt;
+    }
+    return std::move(published).value();
 }

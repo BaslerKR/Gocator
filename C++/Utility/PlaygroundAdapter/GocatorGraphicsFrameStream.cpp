@@ -69,17 +69,14 @@ GocatorGraphicsFrameStream::Impl::Impl(
             {
                 GocatorRangeRejection rejection;
                 GocatorImageRejection imageRejection;
-                auto frame = rejectedRange || rejectedImage
-                    ? _adapter.convertFrameWithRejection(dataSet, gocatorGraphicsFrameRequest(),
-                        rejection, &imageRejection)
-                    : _adapter.convertFrame(dataSet, gocatorGraphicsFrameRequest());
+                auto frame = _adapter.convertFrameWithRejection(
+                    dataSet, gocatorGraphicsFrameRequest(), rejection, &imageRejection, sequence);
                 if (rejectedRange && rejection.reason != GocatorRangeRejection::Reason::None)
                     rejectedRange(rejection, sequence);
                 if (rejectedImage && imageRejection.reason != GraphicsImageFailure::None)
                     rejectedImage(imageRejection, sequence);
                 if (frame.has_value())
                 {
-                    frame->metadata.frameIndex = sequence;
                     _callback(std::move(*frame), 0U);
                 }
             }

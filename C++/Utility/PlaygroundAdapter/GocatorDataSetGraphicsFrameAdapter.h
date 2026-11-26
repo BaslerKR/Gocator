@@ -63,7 +63,8 @@ public:
 
     [[nodiscard]] std::optional<GraphicsFrame> convertFrameWithRejection(
         const GoPxLSdk::GoDataSet& dataSet, const GraphicsFrameRequest& request,
-        GocatorRangeRejection& rejection, GocatorImageRejection* imageRejection = nullptr) const;
+        GocatorRangeRejection& rejection, GocatorImageRejection* imageRejection = nullptr,
+        std::optional<std::uint64_t> frameIndex = std::nullopt) const;
 
     /**
      * @brief Sets the provider that leases one slot for every stored component of a frame.
@@ -81,7 +82,8 @@ private:
         const GoPxLSdk::GoDataSet& dataSet,
         const GraphicsFrameRequest& request,
         GocatorRangeRejection* rejection = nullptr,
-        GocatorImageRejection* imageRejection = nullptr) const;
+        GocatorImageRejection* imageRejection = nullptr,
+        std::optional<std::uint64_t> frameIndex = std::nullopt) const;
 
     mutable std::mutex _storageMutex;
     std::shared_ptr<IFrameStorageProvider> _provider;

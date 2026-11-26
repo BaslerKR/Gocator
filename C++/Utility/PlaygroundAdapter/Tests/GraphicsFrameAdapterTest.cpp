@@ -23,26 +23,25 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
 
-struct RecordingStorage
+static_assert(std::is_const_v<std::remove_reference_t<decltype(std::declval<const GraphicsFrame&>().images())>>);
+static_assert(std::is_const_v<std::remove_reference_t<decltype(*std::declval<GraphicsSpan<std::uint8_t>>().data())>>);
+
+struct RecordingStorage : IFrameStorageProvider
 {
     std::size_t calls = 0;
     std::size_t bytes = 0;
     std::shared_ptr<std::uint8_t> block;
-
-    GraphicsImageStorage function()
+    std::shared_ptr<std::uint8_t> acquire(std::size_t requested) override
     {
-        return [this](const std::size_t requested)
-        {
-            ++calls;
-            bytes = requested;
-            block = std::shared_ptr<std::uint8_t>(
-                new std::uint8_t[requested], std::default_delete<std::uint8_t[]>());
-            return block;
-        };
+        ++calls;
+        bytes = requested;
+        block = std::shared_ptr<std::uint8_t>(new std::uint8_t[requested], std::default_delete<std::uint8_t[]>());
+        return block;
     }
 };
 
@@ -76,8 +75,8 @@ public:
         }
         for (const auto& range : requested.ranges) {
             end = (end + 63U) / 64U * 64U;
-            const GraphicsRangeFrameWriter measure(
-                range.layout, [](std::size_t) { return std::shared_ptr<std::uint8_t>(); });
+            GraphicsFrameBuilder measureBuilder;
+            const GraphicsRangeFrameWriter measure(measureBuilder, range.layout);
             result.ranges.push_back({end, measure.blockBytes()});
             end += measure.blockBytes();
         }
@@ -276,7 +275,7 @@ public:
 
 namespace {
 
-void expectArray(const GraphicsSampleBuffer<float>& values,
+void expectArray(const GraphicsSpan<float>& values,
                  const std::vector<float>& expected,
                  const char* what)
 {
@@ -292,7 +291,7 @@ void expectArray(const GraphicsSampleBuffer<float>& values,
     }
 }
 
-void expectMask(const GraphicsSampleBuffer<std::uint8_t>& values,
+void expectMask(const GraphicsSpan<std::uint8_t>& values,
                 const std::vector<std::uint8_t>& expected)
 {
     assert(values.size() == expected.size());
@@ -346,13 +345,13 @@ std::shared_ptr<GoPxLSdk::GoGdpStamp> stamp(const k64u frameIndex)
 /** The calibrated surface used by the Playground 3D codec parity fixture. */
 void expectCalibratedSurface(const GraphicsFrame& converted, const bool withImage = false)
 {
-    assert(converted.ranges.size() == 1U);
-    assert(withImage ? converted.images.size() == 1U : converted.images.empty());
-    assert(converted.pointClouds.empty());
-    assert(converted.surfaces.empty());
-    assert(converted.ranges.front().descriptor.id == "range");
-    assert(converted.ranges.front().descriptor.displayName == "Range");
-    const RangeFrame& range = converted.ranges.front().payload;
+    assert(converted.ranges().size() == 1U);
+    assert(withImage ? converted.images().size() == 1U : converted.images().empty());
+    assert(converted.pointClouds().empty());
+    assert(converted.surfaces().empty());
+    assert(converted.ranges().front().descriptor.id == "range");
+    assert(converted.ranges().front().descriptor.displayName == "Range");
+    const RangeFrame& range = converted.ranges().front().payload;
     expectRange(range, 3, 2, RangeFrameXYCoordinateMode::UniformPhysical, 0.5, 0.25, 10.0, 20.0);
     expectArray(range.zValues, {1.0F, 3.0F, 0.0F, 7.0F, 0.0F, 11.0F}, "surface Z");
     expectMask(range.validMask, {1U, 1U, 0U, 1U, 0U, 1U});
@@ -361,9 +360,9 @@ void expectCalibratedSurface(const GraphicsFrame& converted, const bool withImag
     assert(range.intensityField.bitsPerSample == 16U);
     assert(range.rangeBits == 0U);
     assert(range.frameId == "42");
-    assert(converted.metadata.sourceName == "LMI Gocator");
-    assert(converted.metadata.frameId == "42");
-    assert(converted.metadata.frameIndex == 42U);
+    assert(converted.metadata().sourceName == "LMI Gocator");
+    assert(converted.metadata().frameId == "42");
+    assert(converted.metadata().frameIndex == 42U);
 }
 
 } // namespace
@@ -400,15 +399,15 @@ int main()
         GraphicsFrameRequest imageRequest;
         imageRequest.components = GraphicsFrameComponent::Image;
         const auto converted = adapter.convertFrameWithRejection(dataSet, imageRequest, rejection);
-        assert(converted && converted->images.size() == 1U && converted->ranges.empty());
-        const auto& result = converted->images.front().payload;
+        assert(converted && converted->images().size() == 1U && converted->ranges().empty());
+        const auto& result = converted->images().front().payload;
         assert(result.isValid());
         assert(result.width == 2 && result.height == 2);
         assert(result.pixelFormat == GraphicsImagePixelFormat::Mono8);
-        assert(result.size == 4U);
+        assert(result.pixels.size() == 4U);
         assert(result.data()[0] == 0U && result.data()[1] == 64U
             && result.data()[2] == 128U && result.data()[3] == 255U);
-        assert(converted->metadata.frameId == "42");
+        assert(converted->metadata().frameId == "42");
         assert(rejection.reason == Rejection::None);
         assert(!rejection.rangeRetained);
     }
@@ -426,13 +425,13 @@ int main()
         GraphicsFrameRequest imageRequest;
         imageRequest.components = GraphicsFrameComponent::Image;
         const auto converted = adapter.convertFrame(dataSet, imageRequest);
-        assert(converted && converted->images.size() == 1U);
-        const auto& result = converted->images.front().payload;
+        assert(converted && converted->images().size() == 1U);
+        const auto& result = converted->images().front().payload;
         assert(result.pixelFormat == GraphicsImagePixelFormat::Mono16);
-        assert(result.size == 4U && storage.calls == 1U && storage.bytes == 4U);
+        assert(result.pixels.size() == 4U && storage.calls == 1U && storage.bytes == 4U);
         const auto* samples = reinterpret_cast<const std::uint8_t*>(result.data());
         assert(samples >= storage.block.get() && samples < storage.block.get() + storage.bytes);
-        assert(converted->metadata.frameId == "9");
+        assert(converted->metadata().frameId == "9");
         adapter.setFrameStorageProvider({});
     }
 
@@ -445,11 +444,11 @@ int main()
         GraphicsFrameRequest imageRequest;
         imageRequest.components = GraphicsFrameComponent::Image;
         const auto converted = adapter.convertFrame(dataSet, imageRequest);
-        assert(converted && converted->images.size() == 1U);
-        const auto& result = converted->images.front().payload;
+        assert(converted && converted->images().size() == 1U);
+        const auto& result = converted->images().front().payload;
         assert(result.pixelFormat == GraphicsImagePixelFormat::BayerGR10);
         assert(result.bitAlignment == GraphicsImageBitAlignment::LeastSignificant);
-        assert(result.stride == 4 && result.size == 8U);
+        assert(result.stride == 4 && result.pixels.size() == 8U);
         const auto* samples = reinterpret_cast<const std::uint16_t*>(result.data());
         assert((samples[0] & 0x3FFU) == 0U);
         assert((samples[1] & 0x3FFU) == 64U);
@@ -466,11 +465,11 @@ int main()
         GraphicsFrameRequest imageRequest;
         imageRequest.components = GraphicsFrameComponent::Image;
         const auto converted = adapter.convertFrame(dataSet, imageRequest);
-        assert(converted && converted->images.size() == 1U);
-        const auto& result = converted->images.front().payload;
+        assert(converted && converted->images().size() == 1U);
+        const auto& result = converted->images().front().payload;
         assert(result.pixelFormat == GraphicsImagePixelFormat::Mono12Packed);
         assert(result.bitAlignment == GraphicsImageBitAlignment::Packed);
-        assert(result.stride == 3 && result.size == 3U);
+        assert(result.stride == 3 && result.pixels.size() == 3U);
     }
 
     {
@@ -493,9 +492,9 @@ int main()
         GraphicsFrameRequest imageRequest;
         imageRequest.components = GraphicsFrameComponent::Image;
         const auto converted = adapter.convertFrame(dataSet, imageRequest);
-        assert(converted && converted->images.size() == 1U);
-        const auto& result = converted->images.front().payload;
-        assert(result.stride == 3 && result.size == 6U);
+        assert(converted && converted->images().size() == 1U);
+        const auto& result = converted->images().front().payload;
+        assert(result.stride == 3 && result.pixels.size() == 6U);
         assert(result.data()[0] == 1U && result.data()[1] == 2U);
         assert(result.data()[3] == 3U && result.data()[4] == 4U);
     }
@@ -550,18 +549,24 @@ int main()
         GraphicsFrameRequest allRequest;
         allRequest.components = GraphicsFrameComponent::All;
         const auto converted = adapter.convertFrameWithRejection(dataSet, allRequest, rejection);
-        assert(converted && converted->images.size() == 1U && converted->ranges.size() == 1U);
-        assert(converted->metadata.frameId == "7");
-        assert(converted->ranges.front().descriptor.groupId == "primary");
-        assert(converted->images.front().descriptor.groupId == "primary");
+        assert(converted && converted->images().size() == 1U && converted->ranges().size() == 1U);
+        assert(converted->metadata().frameId == "7");
+        assert(converted->ranges().front().descriptor.groupId == "primary");
+        assert(converted->images().front().descriptor.groupId == "primary");
         assert(storage.calls == 1U && storage.singleCalls == 0U);
         assert(storage.shape.images.size() == 1U && storage.shape.ranges.size() == 1U);
         assert(storage.shape.metadata.frameId == "7");
-        assert(reinterpret_cast<const std::uint8_t*>(converted->images.front().payload.data())
+        assert(reinterpret_cast<const std::uint8_t*>(converted->images().front().payload.data())
             == storage.block.get() + storage.plan.images[0].offset);
         assert(reinterpret_cast<const std::uint8_t*>(
-            converted->ranges.front().payload.zValues.data())
+            converted->ranges().front().payload.zValues.data())
             == storage.block.get() + storage.plan.ranges[0].offset);
+        assert(converted->images().front().payload.pixels.allocation()->state() == GraphicsAllocationState::Published);
+        assert(converted->ranges().front().payload.zValues.allocation()->state() == GraphicsAllocationState::Published);
+        auto mismatchContext = frameStoragePlanContext(storage.plan);
+        GraphicsFrameBuilder mismatchBuilder(mismatchContext);
+        auto mismatch = mismatchBuilder.reserve<std::uint8_t>(storage.plan.images[0].size + 1U);
+        assert(!mismatch && mismatch.error() == GraphicsFrameError::Allocation);
         assert(rejection.reason == Rejection::None && rejection.rangeRetained
             && rejection.imageRetained);
         adapter.setFrameStorageProvider({});
@@ -578,7 +583,7 @@ int main()
         GocatorImageRejection imageRejection;
         const auto converted = adapter.convertFrameWithRejection(
             dataSet, allRequest, rejection, &imageRejection);
-        assert(converted && converted->images.size() == 1U && converted->ranges.empty());
+        assert(converted && converted->images().size() == 1U && converted->ranges().empty());
         assert(rejection.reason == Rejection::MissingRange);
         assert(rejection.frameRetained && rejection.imageRetained && !rejection.rangeRetained);
         assert(imageRejection.reason == GraphicsImageFailure::None && imageRejection.imageRetained);
@@ -597,7 +602,7 @@ int main()
         GraphicsFrameRequest allRequest;
         allRequest.components = GraphicsFrameComponent::All;
         const auto converted = adapter.convertFrameWithRejection(dataSet, allRequest, rejection);
-        assert(converted && converted->images.empty() && converted->ranges.size() == 1U);
+        assert(converted && converted->images().empty() && converted->ranges().size() == 1U);
         assert(rejection.reason == Rejection::None && rejection.rangeRetained);
     }
 
@@ -644,8 +649,8 @@ int main()
         auto& storage = *storageHolder;
         adapter.setFrameStorageProvider(storageHolder);
         const auto frame = adapter.convertFrame(dataSet, request);
-        assert(frame && frame->images.size() == 1U);
-        assert(frame->images.front().payload.size == 3U);
+        assert(frame && frame->images().size() == 1U);
+        assert(frame->images().front().payload.pixels.size() == 3U);
         assert(storage.calls == 1U && storage.bytes == 3U);
         adapter.setFrameStorageProvider({});
     }
@@ -723,7 +728,7 @@ int main()
         dataSet.Add(shortSurface);
         dataSet.Add(validSurface);
         const auto converted = adapter.convertFrameWithRejection(dataSet, rangeRequest, rejection);
-        assert(converted && converted->ranges.size() == 1U);
+        assert(converted && converted->ranges().size() == 1U);
         assert(rejection.reason == Rejection::TruncatedData);
         assert(rejection.partCount == 2U && rejection.part == 0U);
         assert(rejection.width == 3U && rejection.height == 1U);
@@ -750,7 +755,7 @@ int main()
         expectCalibratedSurface(*converted);
         assert(storage.calls == 1U);
         const auto* samples = reinterpret_cast<const std::uint8_t*>(
-            converted->ranges.front().payload.zValues.data());
+            converted->ranges().front().payload.zValues.data());
         assert(samples >= storage.block.get() && samples < storage.block.get() + storage.bytes);
     }
 
@@ -777,8 +782,8 @@ int main()
             {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {1, 2}, {10, 20, 30, 40}, 2, 2);
         dataSet.Add(surface);
         const auto frame = adapter.convertFrame(dataSet, rangeRequest);
-        assert(frame && frame->ranges.size() == 1U);
-        assert(frame->ranges.front().payload.intensity.empty());
+        assert(frame && frame->ranges().size() == 1U);
+        assert(frame->ranges().front().payload.intensity.empty());
     }
 
     // The same input without provided storage still converts, through the
@@ -805,8 +810,11 @@ int main()
         layout.width = 2;
         layout.height = 2;
         layout.channels.validMask = true;
-        RecordingStorage storage;
-        GraphicsRangeFrameWriter writer(layout, storage.function());
+        auto storageHolder = std::make_shared<RecordingStorage>();
+        auto& storage = *storageHolder;
+        auto context = frameStorageContext(storageHolder);
+        GraphicsFrameBuilder builder(context);
+        GraphicsRangeFrameWriter writer(builder, layout);
         assert(writer.isValid());
         assert(storage.calls == 1);
         assert(storage.bytes == writer.blockBytes());
@@ -817,8 +825,8 @@ int main()
             writer.zData(), writer.validMaskData());
         const RangeFrame frame = writer.takeFrame();
         assert(frame.isValid());
-        assert(frame.zValues.isBorrowed());
-        assert(frame.validMask.isBorrowed());
+        assert(frame.zValues.data() == reinterpret_cast<const float*>(storage.block.get()));
+        assert(frame.validMask.data() != nullptr);
         assert(frame.zValues.data() == reinterpret_cast<const float*>(storage.block.get()));
         assert(frame.zValues[0] == -0.5F);
         assert(frame.zValues[1] == 0.0F);
@@ -847,7 +855,7 @@ int main()
         dataSet.Add(surface);
         const auto converted = adapter.convertFrame(dataSet, rangeRequest);
         assert(converted.has_value());
-        const RangeFrame& frame = converted->ranges.front().payload;
+        const RangeFrame& frame = converted->ranges().front().payload;
         expectRange(frame, 2, 1, RangeFrameXYCoordinateMode::ExplicitXY, 0.5, 0.25, 10.0, 20.0);
         expectArray(frame.xValues, {11.0F, 0.0F}, "surface X");
         expectArray(frame.yValues, {20.75F, 0.0F}, "surface Y");
@@ -872,7 +880,7 @@ int main()
         dataSet.Add(profile);
         const auto converted = adapter.convertFrame(dataSet, rangeRequest);
         assert(converted.has_value());
-        const RangeFrame& frame = converted->ranges.front().payload;
+        const RangeFrame& frame = converted->ranges().front().payload;
         expectRange(frame, 2, 1, RangeFrameXYCoordinateMode::ExplicitXY, 2.0, 1.0, 10.0, 0.0);
         expectArray(frame.xValues, {12.0F, 0.0F}, "profile X");
         expectArray(frame.yValues, {0.0F, 0.0F}, "profile Y");
@@ -899,7 +907,7 @@ int main()
         dataSet.Add(profile);
         const auto converted = adapter.convertFrame(dataSet, rangeRequest);
         assert(converted.has_value());
-        const RangeFrame& frame = converted->ranges.front().payload;
+        const RangeFrame& frame = converted->ranges().front().payload;
         expectRange(frame, 3, 1, RangeFrameXYCoordinateMode::UniformPhysical, 1.0, 1.0, 0.0, 0.0);
         expectArray(frame.zValues, {1.5F, 0.0F, 2.5F}, "profile Z");
         expectMask(frame.validMask, {1U, 0U, 1U});
@@ -907,7 +915,7 @@ int main()
         assert(frame.intensityBits == 8U);
         assert(frame.intensityField.bitsPerSample == 8U);
         assert(frame.frameId == "9");
-        assert(converted->metadata.frameIndex == 9U);
+        assert(converted->metadata().frameIndex == 9U);
         assert(storage.calls == 1U);
     }
 
@@ -954,12 +962,12 @@ int main()
         GocatorImageRejection imageRejection;
         const auto converted = adapter.convertFrameWithRejection(
             dataSet, allRequest, rejection, &imageRejection);
-        assert(converted && converted->images.size() == 1U && converted->ranges.size() == 1U);
+        assert(converted && converted->images().size() == 1U && converted->ranges().size() == 1U);
         assert(storage.calls == 1U && storage.singleCalls == 0U);
         assert(storage.plan.images.size() == 1U && storage.plan.ranges.size() == 1U);
         assert(storage.plan.ranges[0].offset >= storage.plan.images[0].offset + storage.plan.images[0].size);
-        const auto& planned = converted->ranges.front();
-        const auto& plannedImage = converted->images.front();
+        const auto& planned = converted->ranges().front();
+        const auto& plannedImage = converted->images().front();
         assert(reinterpret_cast<const std::uint8_t*>(plannedImage.payload.data())
             == storage.block.get() + storage.plan.images[0].offset);
         assert(reinterpret_cast<const std::uint8_t*>(planned.payload.zValues.data())
@@ -972,7 +980,7 @@ int main()
             && imageShape.descriptor.groupId == plannedImage.descriptor.groupId
             && imageShape.descriptor.registration == plannedImage.descriptor.registration);
         assert(imageShape.width == plannedImage.payload.width && imageShape.height == plannedImage.payload.height
-            && imageShape.stride == plannedImage.payload.stride && imageShape.size == plannedImage.payload.size
+            && imageShape.stride == plannedImage.payload.stride && imageShape.size == plannedImage.payload.pixels.size()
             && imageShape.pixelFormat == plannedImage.payload.pixelFormat
             && imageShape.frameSequence == plannedImage.payload.frameSequence);
         const auto& rangeShape = storage.shape.ranges.front();
@@ -991,9 +999,9 @@ int main()
             && rangeShape.rangeField.id == finalRange.rangeField.id
             && rangeShape.intensityField.bitsPerSample == finalRange.intensityField.bitsPerSample
             && rangeShape.frameId == finalRange.frameId && rangeShape.sensorType == finalRange.sensorType);
-        assert(storage.shape.metadata.frameId == converted->metadata.frameId
-            && storage.shape.metadata.frameIndex == converted->metadata.frameIndex
-            && storage.shape.metadata.sourceName == converted->metadata.sourceName);
+        assert(storage.shape.metadata.frameId == converted->metadata().frameId
+            && storage.shape.metadata.frameIndex == converted->metadata().frameIndex
+            && storage.shape.metadata.sourceName == converted->metadata().sourceName);
         assert(rejection.reason == Rejection::None && rejection.rangeRetained && rejection.imageRetained);
         assert(imageRejection.reason == GraphicsImageFailure::None);
         adapter.setFrameStorageProvider({});
@@ -1018,7 +1026,7 @@ int main()
         GocatorImageRejection imageRejection;
         const auto converted = adapter.convertFrameWithRejection(
             dataSet, allRequest, rejection, &imageRejection);
-        assert(converted && converted->images.empty() && converted->ranges.size() == 1U);
+        assert(converted && converted->images().empty() && converted->ranges().size() == 1U);
         assert(storage.calls == 1U && storage.shape.images.empty() && storage.shape.ranges.size() == 1U);
         assert(imageRejection.reason == GraphicsImageFailure::StrideBelowMinimum);
         assert(rejection.rangeRetained && !rejection.imageRetained);
@@ -1054,11 +1062,12 @@ int main()
         const auto check = [&](GraphicsImageWriterSource source) {
             source.data = bytes.data();
             const auto shape = frameStorageImageShape({}, std::nullopt, source);
-            const auto written = writeGraphicsImage(source);
+            GraphicsFrameBuilder builder;
+            const auto written = writeGraphicsImage(builder, source);
             assert(shape.has_value() == written.isValid());
             if (!shape) return;
             assert(shape->width == written.width && shape->height == written.height);
-            assert(shape->stride == written.stride && shape->size == written.size);
+            assert(shape->stride == written.stride && shape->size == written.pixels.size());
             assert(shape->pixelFormat == written.pixelFormat);
         };
         GraphicsImageWriterSource mono8;
@@ -1091,7 +1100,8 @@ int main()
         layout.height = 1;
         const std::int16_t samples[] = {5, 6};
         layout.channels.validMask = gocator_range::scalarHasInvalid(samples, 2);
-        GraphicsRangeFrameWriter writer(layout);
+        GraphicsFrameBuilder builder;
+        GraphicsRangeFrameWriter writer(builder, layout);
         assert(writer.isValid());
         gocator_range::writeScalarZ(samples, 2, 1.0, 0.0,
             writer.zData(), writer.validMaskData());
@@ -1106,8 +1116,10 @@ int main()
         GraphicsRangeFrameLayout layout;
         layout.width = 2;
         layout.height = 1;
-        GraphicsRangeFrameWriter writer(layout,
-            [](std::size_t) { return std::shared_ptr<std::uint8_t>(); });
+        auto provider = std::make_shared<RecordingProvider>();
+        auto context = frameStorageContext(provider);
+        GraphicsFrameBuilder builder(context);
+        GraphicsRangeFrameWriter writer(builder, layout);
         assert(!writer.isValid());
         assert(!writer.takeFrame().isValid());
     }
