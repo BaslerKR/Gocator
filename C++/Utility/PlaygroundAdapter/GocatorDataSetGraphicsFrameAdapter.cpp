@@ -477,8 +477,6 @@ std::nullopt_t rejectRangeStorage(GocatorRangeRejection* rejection, const Graphi
         return rejectRange(rejection, RangeReason::SizeLimitExceeded, width, height);
     case GraphicsRangeFrameWriterFailure::StorageRefused:
         return rejectRange(rejection, RangeReason::StorageRefused, width, height);
-    case GraphicsRangeFrameWriterFailure::MisalignedStorage:
-        return rejectRange(rejection, RangeReason::StorageMisaligned, width, height);
     case GraphicsRangeFrameWriterFailure::None:
         return rejectRange(rejection, RangeReason::InvalidLayout, width, height);
     }

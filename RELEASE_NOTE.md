@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Drop the removed `GraphicsRangeFrameWriterFailure::MisalignedStorage` case in `GocatorDataSetGraphicsFrameAdapter` and adopt `DevicePluginSessionCapability::GraphicsViewer`.
+
 - Publish immutable GraphicsFrame handles with builder-backed image and range spans while preserving single-lease frame storage and one-copy device conversion.
 
 - Mark dependent `GoJson::Get<T>()` calls in the data-source helpers with `template` so the plugin compiles with Apple clang 21, which rejects the unmarked form.
