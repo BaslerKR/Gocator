@@ -25,7 +25,7 @@ class GoDataSet;
 struct GocatorRangeRejection {
     enum class Reason {
         None, MissingRange, MissingData, InvalidDimensions, UnsupportedFormat, TruncatedData,
-        InvalidLayout, SizeLimitExceeded, StorageRefused, StorageMisaligned
+        InvalidLayout, SizeLimitExceeded, StorageRefused
     };
     Reason reason = Reason::None;
     std::uint32_t partCount = 0;

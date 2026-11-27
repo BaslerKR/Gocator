@@ -911,7 +911,6 @@ void GocatorParameterControlTests::mapsAndSamplesRangeRejections()
         {Reason::InvalidLayout, DeviceRangeRejection::InvalidLayout},
         {Reason::SizeLimitExceeded, DeviceRangeRejection::SizeLimitExceeded},
         {Reason::StorageRefused, DeviceRangeRejection::StorageRefused},
-        {Reason::StorageMisaligned, DeviceRangeRejection::StorageMisaligned},
     };
     for (const auto& [input, expected] : mappings) {
         evidence.reason = input;

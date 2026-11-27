@@ -352,7 +352,6 @@ void GocatorSourceController::reportRangeRejection(
     case Reason::InvalidLayout: observation.reason = DeviceRangeRejection::InvalidLayout; break;
     case Reason::SizeLimitExceeded: observation.reason = DeviceRangeRejection::SizeLimitExceeded; break;
     case Reason::StorageRefused: observation.reason = DeviceRangeRejection::StorageRefused; break;
-    case Reason::StorageMisaligned: observation.reason = DeviceRangeRejection::StorageMisaligned; break;
     }
     if (!_singleInFlight.load(std::memory_order_relaxed)) {
         auto& counter = _rangeRejections[static_cast<std::size_t>(observation.reason)];

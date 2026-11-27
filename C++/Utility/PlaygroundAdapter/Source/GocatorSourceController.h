@@ -248,7 +248,7 @@ private:
     const DeviceRangeRejectionSink _rangeRejectionSink;
     const DeviceImageRejectionSink _imageRejectionSink;
     std::array<std::atomic<std::uint64_t>,
-        static_cast<std::size_t>(DeviceRangeRejection::StorageMisaligned) + 1> _rangeRejections{};
+        static_cast<std::size_t>(DeviceRangeRejection::StorageRefused) + 1> _rangeRejections{};
     std::array<std::atomic<std::uint64_t>,
         static_cast<std::size_t>(DeviceImageRejection::NoImage) + 1> _imageRejections{};
     void reportRangeRejection(const GocatorRangeRejection& rejection, std::size_t frameSequence) noexcept;

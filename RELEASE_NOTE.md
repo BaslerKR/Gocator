@@ -1,6 +1,6 @@
 ## Unreleased
 
-- Drop the removed `GraphicsRangeFrameWriterFailure::MisalignedStorage` case in `GocatorDataSetGraphicsFrameAdapter` and adopt `DevicePluginSessionCapability::GraphicsViewer`.
+- Drop the removed `GraphicsRangeFrameWriterFailure::MisalignedStorage` case and the unreachable `StorageMisaligned` range rejection in `GocatorDataSetGraphicsFrameAdapter` and adopt `DevicePluginSessionCapability::GraphicsViewer`.
 
 - Publish immutable GraphicsFrame handles with builder-backed image and range spans while preserving single-lease frame storage and one-copy device conversion.
 
