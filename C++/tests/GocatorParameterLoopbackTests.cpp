@@ -314,6 +314,7 @@ void GocatorParameterLoopbackTests::codecCarriesTreeSnapshotDeltaAndResync()
 
     // The same controller owns the standard acquisition lifecycle. Live does not disturb the
     // loopback parameter authority, and Single while Live is refused without a second effect.
+    controller.setFrameContextSource(std::make_shared<GraphicsLocalFrameContextSource>());
     const auto connectionId = controller.currentConnectionId(4);
     QVERIFY(controller.connectionCapabilities().single.available);
     QVERIFY(controller.connectionCapabilities().live.available);

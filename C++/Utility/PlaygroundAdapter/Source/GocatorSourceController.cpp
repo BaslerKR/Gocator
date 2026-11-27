@@ -11,6 +11,25 @@
 
 namespace {
 
+std::string contextErrorMessage(const GraphicsFrameError error)
+{
+    switch (error) {
+    case GraphicsFrameError::None: return "Frame storage failed.";
+    case GraphicsFrameError::InvalidInput: return "Frame storage request is invalid.";
+    case GraphicsFrameError::Capacity:
+        return "Frame storage admission failed: frame size exceeds capacity.";
+    case GraphicsFrameError::Allocation: return "Frame storage allocation failed.";
+    case GraphicsFrameError::Disconnected: return "Frame storage session is disconnected.";
+    case GraphicsFrameError::StaleGeneration: return "Frame storage grant expired.";
+    case GraphicsFrameError::UnsealedWrite: return "Frame write region remained open.";
+    case GraphicsFrameError::ClassNotPrepared: return "Frame storage class is not prepared.";
+    case GraphicsFrameError::NoReadyCredit: return "Frame storage has no ready credit.";
+    case GraphicsFrameError::ClassRefused:
+        return "Frame storage admission failed: class refused by host.";
+    }
+    return "Frame storage allocation failed.";
+}
+
 DeviceConnectionResult refused(DeviceConnectionError error, std::string message)
 {
     return {error, std::move(message)};
@@ -154,6 +173,11 @@ void GocatorSourceController::start() {
     if (_singleInFlight.load())
         throw std::runtime_error("A single grab is in flight.");
     if (liveActive()) return;
+    if (isConnectedForGrab()) {
+        std::string sourceError;
+        if (!activeContextSource(&sourceError))
+            throw std::runtime_error(sourceError);
+    }
     bool expected = false;
     if (!_acquisitionStarting.compare_exchange_strong(expected, true)) {
         if (_singleInFlight.load())
@@ -177,6 +201,7 @@ void GocatorSourceController::start() {
 }
 
 void GocatorSourceController::stop() {
+    revokeActiveRun();
     if (!_lifecycle.stop && !_gocator) return;
     if (_lifecycle.stop) _lifecycle.stop();
     else _gocator->stop();
@@ -217,12 +242,54 @@ bool GocatorSourceController::beginGrab(std::size_t frames) {
     if (_imageRejectionSink) {
         for (auto& count : _imageRejections) count.store(0, std::memory_order_relaxed);
     }
-    if (_lifecycle.grab) return _lifecycle.grab(frames);
-    if (!_gocator) return false;
-    return _gocator->grab(frames);
+    _droppedFrames.store(0, std::memory_order_relaxed);
+
+    std::shared_ptr<ContextSourceState> state;
+    if (isConnectedForGrab()) {
+        std::string sourceError;
+        state = activeContextSource(&sourceError);
+        if (!state) throw std::runtime_error(sourceError);
+    } else {
+        std::lock_guard<std::mutex> lock(_contextMutex);
+        state = _contextSourceState;
+    }
+
+    auto run = std::make_shared<AcquisitionRun>();
+    {
+        std::lock_guard<std::mutex> lock(_contextMutex);
+        if (_activeRun) {
+            _activeRun->cancelled.store(true, std::memory_order_release);
+            _activeRun->active.store(false, std::memory_order_release);
+        }
+        run->generation = ++_runGeneration;
+        run->contextState = state;
+        _activeRun = run;
+    }
+    if (_singleInFlight.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::mutex> lock(_singleMutex);
+        if (_singleRun) _singleRun->generation = run->generation;
+    }
+    if (_gocator) {
+        rebuildGraphicsStream(run);
+    }
+
+    bool started = false;
+    try {
+        if (_lifecycle.grab) started = _lifecycle.grab(frames);
+        else if (_gocator) started = _gocator->grab(frames);
+    } catch (...) {
+        run->cancelled.store(true, std::memory_order_release);
+        run->active.store(false, std::memory_order_release);
+        throw;
+    }
+    if (!started) {
+        run->cancelled.store(true, std::memory_order_release);
+        run->active.store(false, std::memory_order_release);
+    }
+    return started;
 }
 
-void GocatorSourceController::noteAcquisitionFrame() {
+void GocatorSourceController::noteAcquisitionFrame(const std::uint64_t runGeneration) {
     if (!_singleInFlight.load(std::memory_order_relaxed)) return;
     std::shared_ptr<SingleRun> run;
     {
@@ -232,9 +299,27 @@ void GocatorSourceController::noteAcquisitionFrame() {
     if (!run) return;
     {
         std::lock_guard<std::mutex> lock(run->mutex);
+        if (runGeneration != 0 && run->generation != 0 && run->generation != runGeneration) return;
         run->delivered = true;
     }
     run->condition.notify_all();
+}
+
+void GocatorSourceController::noteSingleStorageFailure(
+    const std::uint64_t runGeneration, std::string message)
+{
+    if (!_singleInFlight.load(std::memory_order_relaxed)) return;
+    std::shared_ptr<SingleRun> run;
+    {
+        std::lock_guard<std::mutex> lock(_singleMutex);
+        run = _singleRun;
+    }
+    if (!run) return;
+    {
+        std::lock_guard<std::mutex> lock(run->mutex);
+        if (runGeneration != 0 && run->generation != 0 && run->generation != runGeneration) return;
+        if (run->failureMessage.empty()) run->failureMessage = std::move(message);
+    }
 }
 
 void GocatorSourceController::noteAcquisitionEnded() {
@@ -278,9 +363,158 @@ void GocatorSourceController::setFrameConsumer(FrameConsumer consumer) {
     _frameConsumer = std::move(consumer);
 }
 
-void GocatorSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider) {
-    _frameStorage = std::move(provider);
-    if (_graphicsStream) _graphicsStream->setFrameStorageProvider(_frameStorage);
+std::shared_ptr<GocatorSourceController::ContextSourceState>
+GocatorSourceController::activeContextSource(std::string* error) const
+{
+    std::shared_ptr<ContextSourceState> state;
+    {
+        std::lock_guard<std::mutex> lock(_contextMutex);
+        state = _contextSourceState;
+    }
+    if (!state || !state->source) {
+        if (error) *error = "Frame context source is not configured.";
+        return {};
+    }
+    if (state->stickyError.load(std::memory_order_acquire) != GraphicsFrameError::None) {
+        std::lock_guard<std::mutex> stateLock(state->mutex);
+        if (error) {
+            const auto err = state->stickyError.load(std::memory_order_acquire);
+            *error = state->stickyMessage.empty() ? contextErrorMessage(err) : state->stickyMessage;
+        }
+        return {};
+    }
+    return state;
+}
+
+void GocatorSourceController::recordStickyContextFailure(
+    const std::shared_ptr<ContextSourceState>& state,
+    const GraphicsFrameError error,
+    std::string message)
+{
+    if (!state || (error != GraphicsFrameError::ClassRefused && error != GraphicsFrameError::Capacity))
+        return;
+    std::lock_guard<std::mutex> stateLock(state->mutex);
+    if (state->stickyError.load(std::memory_order_acquire) == GraphicsFrameError::None) {
+        state->stickyMessage = message.empty() ? contextErrorMessage(error) : std::move(message);
+        state->stickyError.store(error, std::memory_order_release);
+    }
+}
+
+bool GocatorSourceController::isConnectedForGrab() const
+{
+    if (_lifecycle.snapshot) return _lifecycle.snapshot().opened;
+    if (_gocator) return _gocator->isOpened();
+    return false;
+}
+
+void GocatorSourceController::revokeActiveRun()
+{
+    std::shared_ptr<AcquisitionRun> run;
+    {
+        std::lock_guard<std::mutex> lock(_contextMutex);
+        run = _activeRun;
+    }
+    if (run) {
+        run->cancelled.store(true, std::memory_order_release);
+        run->active.store(false, std::memory_order_release);
+    }
+}
+
+std::uint64_t GocatorSourceController::droppedFrames() const noexcept
+{
+    return _droppedFrames.load(std::memory_order_acquire);
+}
+
+void GocatorSourceController::rebuildGraphicsStream(const std::shared_ptr<AcquisitionRun>& run)
+{
+    std::lock_guard<std::mutex> streamLock(_streamMutex);
+    _graphicsStream.reset();
+    if (!_gocator || !run || !run->contextState || !run->contextState->source) {
+        return;
+    }
+
+    GocatorGraphicsFrameStream::RejectedRange rejectedRange;
+    if (_rangeRejectionSink) {
+        rejectedRange = [this](const GocatorRangeRejection& rejection, const std::size_t sequence) {
+            reportRangeRejection(rejection, sequence);
+        };
+    }
+    GocatorGraphicsFrameStream::RejectedImage rejectedImage;
+    if (_imageRejectionSink) {
+        rejectedImage = [this](const GocatorImageRejection& rejection, const std::size_t sequence) {
+            reportImageRejection(rejection, sequence);
+        };
+    }
+    auto cancelledFlag = std::shared_ptr<const std::atomic<bool>>(run, &run->cancelled);
+    auto storageOutcome = [this, run](const GraphicsFrameError err) {
+        if (err == GraphicsFrameError::NoReadyCredit) {
+            _droppedFrames.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        if (err == GraphicsFrameError::ClassRefused || err == GraphicsFrameError::Capacity) {
+            _droppedFrames.fetch_add(1, std::memory_order_relaxed);
+            auto message = contextErrorMessage(err);
+            recordStickyContextFailure(run->contextState, err, message);
+            noteSingleStorageFailure(run->generation, message);
+            Gocator::syslog("Gocator frame storage refused: " + message, true);
+            return;
+        }
+        if (err == GraphicsFrameError::Allocation) {
+            _droppedFrames.fetch_add(1, std::memory_order_relaxed);
+            auto message = contextErrorMessage(err);
+            noteSingleStorageFailure(run->generation, message);
+            Gocator::syslog("Gocator producer contract error: planned reserve exceeded frame context budget.", true);
+        }
+    };
+
+    _graphicsStream = std::make_unique<GocatorGraphicsFrameStream>(
+        _gocator,
+        run->contextState->source,
+        [this, run](GraphicsFrame&& payload, const unsigned int sourceIndex) {
+            if (!run->active.load(std::memory_order_acquire)
+                || run->cancelled.load(std::memory_order_acquire)) {
+                return;
+            }
+            if (!_frameConsumer) return;
+            SessionFrame frame;
+            frame.payload = std::move(payload);
+            frame.frameSeq = _frameSeq.fetch_add(1, std::memory_order_relaxed);
+            _frameConsumer(std::move(frame), sourceIndex);
+            noteAcquisitionFrame(run->generation);
+        },
+        std::move(rejectedRange),
+        std::move(rejectedImage),
+        std::move(storageOutcome),
+        std::move(cancelledFlag));
+}
+
+void GocatorSourceController::setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source) {
+    revokeActiveRun();
+    {
+        std::lock_guard<std::mutex> streamLock(_streamMutex);
+        _graphicsStream.reset();
+    }
+    std::shared_ptr<ContextSourceState> nextState;
+    if (source) {
+        nextState = std::make_shared<ContextSourceState>();
+        nextState->source = std::move(source);
+    }
+    std::shared_ptr<AcquisitionRun> standbyRun;
+    {
+        std::lock_guard<std::mutex> lock(_contextMutex);
+        _contextSourceState = nextState;
+        if (nextState) {
+            standbyRun = std::make_shared<AcquisitionRun>();
+            standbyRun->generation = 0;
+            standbyRun->contextState = nextState;
+            _activeRun = standbyRun;
+        } else {
+            _activeRun.reset();
+        }
+    }
+    if (_gocator && standbyRun) {
+        rebuildGraphicsStream(standbyRun);
+    }
 }
 
 void GocatorSourceController::registerCallbacks() {
@@ -311,30 +545,6 @@ void GocatorSourceController::registerCallbacks() {
             }
         }
     });
-
-    GocatorGraphicsFrameStream::RejectedRange rejectedRange;
-    if (_rangeRejectionSink) {
-        rejectedRange = [this](const GocatorRangeRejection& rejection, const std::size_t sequence) {
-            reportRangeRejection(rejection, sequence);
-        };
-    }
-    GocatorGraphicsFrameStream::RejectedImage rejectedImage;
-    if (_imageRejectionSink) {
-        rejectedImage = [this](const GocatorImageRejection& rejection, const std::size_t sequence) {
-            reportImageRejection(rejection, sequence);
-        };
-    }
-    _graphicsStream = std::make_unique<GocatorGraphicsFrameStream>(
-        _gocator,
-        [this](GraphicsFrame&& payload, const unsigned int sourceIndex) {
-            if (!_frameConsumer) return;
-            SessionFrame frame;
-            frame.payload = std::move(payload);
-            frame.frameSeq = _frameSeq.fetch_add(1, std::memory_order_relaxed);
-            _frameConsumer(std::move(frame), sourceIndex);
-            noteAcquisitionFrame();
-        }, std::move(rejectedRange), std::move(rejectedImage));
-    if (_frameStorage) _graphicsStream->setFrameStorageProvider(_frameStorage);
 }
 
 void GocatorSourceController::reportRangeRejection(
@@ -397,6 +607,11 @@ void GocatorSourceController::reportImageRejection(
 }
 
 void GocatorSourceController::deregisterCallbacks() {
+    revokeActiveRun();
+    {
+        std::lock_guard<std::mutex> streamLock(_streamMutex);
+        _graphicsStream.reset();
+    }
     if (!_gocator) return;
 
     _statusCallbackGate.beginShutdown();
@@ -405,14 +620,16 @@ void GocatorSourceController::deregisterCallbacks() {
         _statusCallbackId = 0;
     }
     _statusCallbackGate.waitForDrain();
-    _graphicsStream.reset();
 }
 
 std::optional<SourceRuntimeDiagnostics> GocatorSourceController::sourceRuntimeDiagnostics(unsigned sourceIndex) const
 {
     if (sourceIndex != 0 || !_gocator) return std::nullopt;
     const auto value = _gocator->runtimeDiagnostics();
-    return SourceRuntimeDiagnostics{value.grabbing, value.delivered, value.failed};
+    return SourceRuntimeDiagnostics{
+        value.grabbing,
+        value.delivered,
+        value.failed + _droppedFrames.load(std::memory_order_acquire)};
 }
 
 DeviceConnectionState GocatorSourceController::connectionState() const
@@ -588,6 +805,9 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
 
     const bool reserveAcquisition = single || liveStart;
     if (reserveAcquisition) {
+        std::string sourceError;
+        if (!activeContextSource(&sourceError))
+            return refused(DeviceConnectionError::BackendFailure, std::move(sourceError));
         bool expected = false;
         if (!_acquisitionStarting.compare_exchange_strong(expected, true))
             return refused(DeviceConnectionError::Busy,
@@ -664,6 +884,7 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
                     _acquisitionStarting = false;
                     bool delivered = false;
                     bool ended = false;
+                    std::string storageFailure;
                     {
                         std::unique_lock<std::mutex> lock(singleRun->mutex);
                         if (started || singleRun->delivered)
@@ -672,6 +893,7 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
                         stopped = singleRun->stopped;
                         delivered = singleRun->delivered;
                         ended = singleRun->ended;
+                        storageFailure = singleRun->failureMessage;
                     }
                     if (stopped && started && !ended) stop();
                     if (!started && !delivered && !ended && !stopped) {
@@ -692,11 +914,13 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
                                 diagnostics.stopError.empty() ? "Gocator stop failed." : diagnostics.stopError,
                                 DeviceConnectionEffect::Unknown, copiedState()};
                         } else {
+                            const std::string fallbackFailure = stopped
+                                ? "Single acquisition was stopped before a frame was delivered."
+                                : "Single acquisition ended without delivering a frame.";
                             result = delivered
                                 ? DeviceConnectionResult{{}, {}, DeviceConnectionEffect::Applied, copiedState()}
                                 : DeviceConnectionResult{DeviceConnectionError::BackendFailure,
-                                    stopped ? "Single acquisition was stopped before a frame was delivered."
-                                            : "Single acquisition ended without delivering a frame.",
+                                    storageFailure.empty() ? fallbackFailure : storageFailure,
                                     acquisitionOccurred ? DeviceConnectionEffect::Applied : DeviceConnectionEffect::None,
                                     copiedState()};
                         }

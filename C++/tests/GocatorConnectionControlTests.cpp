@@ -17,8 +17,10 @@
 
 #include "Utility/PlaygroundAdapter/GocatorDataSetGraphicsFrameAdapter.h"
 #include "Utility/PlaygroundAdapter/Source/GocatorSourceController.h"
+#include "DeviceRuntime/Contract/FrameContextClient.h"
 #include "DeviceRuntime/Contract/SessionFrame.h"
 #include "Internal/GocatorSdkRuntime.h"
+#include "engine/GraphicsFrameContext.h"
 
 class GoGdpMsgTests
 {
@@ -97,13 +99,20 @@ private slots:
     void grabFailurePreservesEffectHint();
     void singleStopFailureIsNotSuccess();
     void singleStopFailureIsNotSuccess_data();
+    void frameContextRequiredWithoutFallback();
+    void frameContextTransactionAndNoReadyCreditDrop();
+    void frameContextClassRefusedIsSticky();
+    void cancellationOrStopReleasesOpenBuilder();
+    void stopAndRearmIgnoresLateCallbackFromOldRun();
 
 private:
     static void bind(GocatorSourceController& controller, FakeGocator& fake);
+    static void bindSyntheticGocator(GocatorSourceController& controller, std::atomic<bool>& grabbing);
 };
 
 void GocatorConnectionControlTests::bind(GocatorSourceController& controller, FakeGocator& fake)
 {
+    controller.setFrameContextSource(std::make_shared<GraphicsLocalFrameContextSource>());
     controller._lifecycleAvailable = true;
     controller._lifecycle.cachedDevices = [&fake] { return fake.devices; };
     controller._lifecycle.snapshot = [&fake] { return fake.snapshot; };
@@ -542,6 +551,7 @@ void GocatorConnectionControlTests::registeredCallbacksCompleteSingle()
     QFETCH(bool, validImage);
     Gocator gocator;
     GocatorSourceController controller(&gocator);
+    controller.setFrameContextSource(std::make_shared<GraphicsLocalFrameContextSource>());
     std::size_t frames = 0;
     controller.setFrameConsumer([&frames](SessionFrame&& frame, unsigned) {
         if (frame.payload.hasImage()) ++frames;
@@ -1029,6 +1039,433 @@ void GocatorConnectionControlTests::singleStopFailureIsNotSuccess()
     QCOMPARE(result.error, DeviceConnectionError::BackendFailure);
     QCOMPARE(result.effect, DeviceConnectionEffect::Unknown);
     QCOMPARE(QString::fromStdString(result.message), QStringLiteral("stop timeout"));
+}
+
+namespace {
+
+class TestManagedAllocation final : public GraphicsAllocation
+{
+public:
+    [[nodiscard]] static GraphicsAllocation* create(
+        const std::size_t capacityBytes,
+        const std::uint64_t domainId,
+        std::atomic<std::size_t>* const liveCount) noexcept
+    {
+        auto* rawBuffer = new (std::nothrow) std::byte[capacityBytes + 64U];
+        if (!rawBuffer) return nullptr;
+        const auto raw = reinterpret_cast<std::uintptr_t>(rawBuffer);
+        auto* aligned = reinterpret_cast<std::byte*>((raw + 63U) & ~std::uintptr_t(63U));
+        auto* alloc = new (std::nothrow) TestManagedAllocation(
+            rawBuffer, aligned, capacityBytes, domainId, liveCount);
+        if (!alloc) delete[] rawBuffer;
+        return alloc;
+    }
+
+    ~TestManagedAllocation() override
+    {
+        if (_liveCount) _liveCount->fetch_sub(1U, std::memory_order_relaxed);
+    }
+
+    void destroy() noexcept override { delete this; }
+
+private:
+    TestManagedAllocation(
+        std::byte* rawBuffer,
+        std::byte* alignedBase,
+        std::size_t capacityBytes,
+        std::uint64_t domainId,
+        std::atomic<std::size_t>* liveCount) noexcept
+        : GraphicsAllocation(alignedBase, capacityBytes, GraphicsAllocationOrigin::Managed, 1U,
+                             GraphicsAllocationState::Writable, domainId)
+        , _buffer(rawBuffer)
+        , _liveCount(liveCount)
+    {
+        if (_liveCount) _liveCount->fetch_add(1U, std::memory_order_relaxed);
+    }
+
+    std::unique_ptr<std::byte[]> _buffer;
+    std::atomic<std::size_t>* _liveCount = nullptr;
+};
+
+class TestFrameAllocator final : public GraphicsFrameAllocator
+{
+public:
+    TestFrameAllocator(
+        GraphicsAllocationRef backing,
+        std::size_t sampleLimit,
+        std::uint64_t domainId,
+        std::atomic<std::size_t>* reserveCalls)
+        : _backing(std::move(backing))
+        , _sampleLimit(sampleLimit)
+        , _domainId(domainId)
+        , _reserveCalls(reserveCalls)
+    {
+    }
+
+    GraphicsResult<GraphicsAllocationSlice> allocate(
+        const std::size_t bytes, const std::size_t alignment) noexcept override
+    {
+        if (_reserveCalls) _reserveCalls->fetch_add(1U, std::memory_order_relaxed);
+        if (alignment == 0U || (alignment & (alignment - 1U)) != 0U)
+            return GraphicsFrameError::InvalidInput;
+        const auto baseAddr = reinterpret_cast<std::uintptr_t>(_backing->base());
+        const auto curAddr = baseAddr + static_cast<std::uintptr_t>(_cursor);
+        const std::size_t misalignment = static_cast<std::size_t>(curAddr & (alignment - 1U));
+        const std::size_t pad = misalignment == 0U ? 0U : (alignment - misalignment);
+        if (pad > _sampleLimit || _cursor + pad > _sampleLimit
+            || bytes > _sampleLimit - (_cursor + pad))
+            return GraphicsFrameError::Capacity;
+        const std::size_t offset = _cursor + pad;
+        _cursor = offset + bytes;
+        return GraphicsAllocationSlice{_backing, offset, bytes};
+    }
+
+    bool isManaged() const noexcept override { return true; }
+    std::uint64_t domainId() const noexcept override { return _domainId; }
+
+private:
+    GraphicsAllocationRef _backing;
+    std::size_t _sampleLimit = 0U;
+    std::uint64_t _domainId = 0U;
+    std::size_t _cursor = 0U;
+    std::atomic<std::size_t>* _reserveCalls = nullptr;
+};
+
+class ScriptedContextSource final : public GraphicsFrameContextSource
+{
+public:
+    static constexpr std::uint64_t kDomainId = 9001U;
+
+    std::atomic<std::size_t> calls{0};
+    std::atomic<std::size_t> reserveCalls{0};
+    std::atomic<std::size_t> liveAllocations{0};
+    std::atomic<GraphicsFrameError> nextError{GraphicsFrameError::None};
+    std::function<void()> onAfterBeginFrame;
+
+    GraphicsResult<GraphicsFrameContext> beginFrame(const std::size_t sampleBytes) noexcept override
+    {
+        calls.fetch_add(1U, std::memory_order_relaxed);
+        const auto err = nextError.load(std::memory_order_acquire);
+        if (err != GraphicsFrameError::None) return err;
+        auto* rawAlloc = TestManagedAllocation::create(sampleBytes, kDomainId, &liveAllocations);
+        if (!rawAlloc) return GraphicsFrameError::Allocation;
+        auto allocator = std::make_shared<TestFrameAllocator>(
+            GraphicsAllocationRef::adoptNew(rawAlloc), sampleBytes, kDomainId, &reserveCalls);
+        GraphicsFrameContext ctx(std::move(allocator));
+        if (onAfterBeginFrame) onAfterBeginFrame();
+        return ctx;
+    }
+};
+
+} // namespace
+
+void GocatorConnectionControlTests::bindSyntheticGocator(
+    GocatorSourceController& controller, std::atomic<bool>& grabbing)
+{
+    controller._lifecycle.snapshot = [] {
+        return Gocator::ConnectionSnapshot{true, 9, "10.0.0.9", "10.0.0.9"};
+    };
+    controller._lifecycle.beginControl = [] { return true; };
+    controller._lifecycle.endControl = [] {};
+    controller._lifecycle.diagnostics = [&grabbing] {
+        return GocatorRuntimeDiagnostics{grabbing.load(), 0, 0};
+    };
+    controller._lifecycle.grab = [&grabbing](std::size_t) {
+        grabbing.store(true);
+        return true;
+    };
+    controller._lifecycle.stop = [&grabbing] { grabbing.store(false); };
+}
+
+void GocatorConnectionControlTests::frameContextRequiredWithoutFallback()
+{
+    FakeGocator fake;
+    GocatorSourceController controller(nullptr);
+    bind(controller, fake);
+
+    auto* client = qobject_cast<IFrameContextClient*>(&controller);
+    QVERIFY(client != nullptr);
+    QCOMPARE(QString::fromLatin1(qobject_interface_iid<IFrameContextClient*>()),
+             QStringLiteral("org.playground.DeviceRuntime.FrameContextClient/1"));
+
+    const auto connected = awaitState(controller, [&](auto done) {
+        return controller.requestConnect("192.168.1.10", done);
+    });
+    QVERIFY(connected.state && connected.state->connected);
+    const std::string connectionId = connected.state->connectionId;
+
+    // Clearing the context source must refuse Single, LiveStart, and start() without Local fallback.
+    client->setFrameContextSource({});
+    int completions = 0;
+    const auto single = controller.requestSingle(connectionId, [&](auto) { ++completions; });
+    QCOMPARE(single.error, DeviceConnectionError::BackendFailure);
+    QCOMPARE(single.effect, DeviceConnectionEffect::None);
+    const auto live = controller.requestLiveStart(connectionId, [&](auto) { ++completions; });
+    QCOMPARE(live.error, DeviceConnectionError::BackendFailure);
+    QCOMPARE(live.effect, DeviceConnectionEffect::None);
+    QCOMPARE(completions, 0);
+    QCOMPARE(fake.singleGrabs, std::size_t{0});
+    QCOMPARE(fake.liveGrabs, std::size_t{0});
+
+    bool startThrew = false;
+    try {
+        controller.start();
+    } catch (const std::runtime_error&) {
+        startThrew = true;
+    }
+    QVERIFY(startThrew);
+    QCOMPARE(fake.liveGrabs, std::size_t{0});
+}
+
+void GocatorConnectionControlTests::frameContextTransactionAndNoReadyCreditDrop()
+{
+    Gocator gocator;
+    GocatorSourceController controller(&gocator);
+    std::atomic<bool> grabbing{false};
+    bindSyntheticGocator(controller, grabbing);
+
+    auto source = std::make_shared<ScriptedContextSource>();
+    std::atomic<std::size_t> delivered{0};
+    controller.setFrameConsumer([&delivered](SessionFrame&& frame, unsigned) {
+        if (frame.payload.hasImage()) delivered.fetch_add(1);
+    });
+    controller.setFrameContextSource(source);
+
+    const auto live = awaitState(controller, [&](auto done) {
+        return controller.requestLiveStart(controller.currentConnectionId(9), done);
+    });
+    QCOMPARE(live.error, DeviceConnectionError::None);
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+
+    GoPxLSdk::GoDataSet dataSet;
+    dataSet.Add(GoGdpMsgTests::monoPixel());
+
+    // Success: one beginFrame + one reserve, live allocation released after frame drops.
+    gocator.receiveDataForTest(dataSet);
+    QCOMPARE(delivered.load(), std::size_t{1});
+    QCOMPARE(source->calls.load(), std::size_t{1});
+    QCOMPARE(source->reserveCalls.load(), std::size_t{1});
+    QCOMPARE(controller.droppedFrames(), std::uint64_t{0});
+
+    // NoReadyCredit: drop before reserve/copy, count the drop, and recover when credit returns.
+    source->nextError.store(GraphicsFrameError::NoReadyCredit, std::memory_order_release);
+    gocator.receiveDataForTest(dataSet);
+    gocator.receiveDataForTest(dataSet);
+    QCOMPARE(delivered.load(), std::size_t{1});
+    QCOMPARE(source->calls.load(), std::size_t{3});
+    QCOMPARE(source->reserveCalls.load(), std::size_t{1});
+    QCOMPARE(controller.droppedFrames(), std::uint64_t{2});
+    QCOMPARE(controller.sourceRuntimeDiagnostics(0)->failed, std::uint64_t{2});
+
+    source->nextError.store(GraphicsFrameError::None, std::memory_order_release);
+    gocator.receiveDataForTest(dataSet);
+    QCOMPARE(delivered.load(), std::size_t{2});
+    QCOMPARE(source->calls.load(), std::size_t{4});
+    QCOMPARE(source->reserveCalls.load(), std::size_t{2});
+
+    controller.stop();
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
+    QCOMPARE(source->liveAllocations.load(), std::size_t{0});
+}
+
+void GocatorConnectionControlTests::frameContextClassRefusedIsSticky()
+{
+    Gocator gocator;
+    GocatorSourceController controller(&gocator);
+    std::atomic<bool> grabbing{false};
+    bindSyntheticGocator(controller, grabbing);
+
+    auto source = std::make_shared<ScriptedContextSource>();
+    std::atomic<std::size_t> delivered{0};
+    controller.setFrameConsumer([&delivered](SessionFrame&&, unsigned) { delivered.fetch_add(1); });
+    controller.setFrameContextSource(source);
+
+    const std::string connectionId = controller.currentConnectionId(9);
+    source->nextError.store(GraphicsFrameError::ClassRefused, std::memory_order_release);
+
+    auto singlePromise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto singleFuture = singlePromise->get_future();
+    QCOMPARE(controller.requestSingle(connectionId, [singlePromise](DeviceConnectionResult result) {
+        singlePromise->set_value(std::move(result));
+    }).error, DeviceConnectionError::None);
+    QTRY_VERIFY(controller._singleInFlight.load());
+    QTRY_VERIFY(grabbing.load());
+
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+    GoPxLSdk::GoDataSet dataSet;
+    dataSet.Add(GoGdpMsgTests::monoPixel());
+
+    // First dataset hits ClassRefused; second dataset in the same run must not retry beginFrame.
+    gocator.receiveDataForTest(dataSet);
+    const std::size_t callsAfterFirst = source->calls.load();
+    QCOMPARE(callsAfterFirst, std::size_t{1});
+    source->nextError.store(GraphicsFrameError::None, std::memory_order_release);
+    gocator.receiveDataForTest(dataSet);
+    QCOMPARE(source->calls.load(), callsAfterFirst);
+
+    grabbing.store(false);
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
+    const auto refused = singleFuture.get();
+    QCOMPARE(refused.error, DeviceConnectionError::BackendFailure);
+    QVERIFY(refused.message.find("class refused") != std::string::npos);
+    QCOMPARE(delivered.load(), std::size_t{0});
+
+    // Subsequent Single, LiveStart, and start() stay refused without touching beginFrame.
+    int completions = 0;
+    QCOMPARE(controller.requestSingle(connectionId, [&](auto) { ++completions; }).error,
+        DeviceConnectionError::BackendFailure);
+    QCOMPARE(controller.requestLiveStart(connectionId, [&](auto) { ++completions; }).error,
+        DeviceConnectionError::BackendFailure);
+    QCOMPARE(completions, 0);
+    bool startThrew = false;
+    try { controller.start(); } catch (const std::runtime_error&) { startThrew = true; }
+    QVERIFY(startThrew);
+    QCOMPARE(source->calls.load(), callsAfterFirst);
+
+    // Injecting a fresh context source clears the sticky refusal and succeeds.
+    controller.setFrameContextSource(std::make_shared<GraphicsLocalFrameContextSource>());
+    auto okPromise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto okFuture = okPromise->get_future();
+    QCOMPARE(controller.requestSingle(connectionId, [okPromise](DeviceConnectionResult result) {
+        okPromise->set_value(std::move(result));
+    }).error, DeviceConnectionError::None);
+    QTRY_VERIFY(controller._singleInFlight.load());
+    QTRY_VERIFY(grabbing.load());
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+    GoPxLSdk::GoDataSet secondDataSet;
+    secondDataSet.Add(GoGdpMsgTests::monoPixel());
+    gocator.receiveDataForTest(secondDataSet);
+    grabbing.store(false);
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
+    const auto ok = okFuture.get();
+    QCOMPARE(ok.error, DeviceConnectionError::None);
+    QCOMPARE(delivered.load(), std::size_t{1});
+}
+
+void GocatorConnectionControlTests::cancellationOrStopReleasesOpenBuilder()
+{
+    Gocator gocator;
+    GocatorSourceController controller(&gocator);
+    std::atomic<bool> grabbing{false};
+    bindSyntheticGocator(controller, grabbing);
+
+    auto source = std::make_shared<ScriptedContextSource>();
+    auto entered = std::make_shared<std::promise<void>>();
+    auto enteredFuture = entered->get_future();
+    auto release = std::make_shared<std::promise<void>>();
+    auto releaseFuture = release->get_future().share();
+    source->onAfterBeginFrame = [entered, releaseFuture]() {
+        entered->set_value();
+        releaseFuture.wait();
+    };
+
+    std::atomic<std::size_t> delivered{0};
+    controller.setFrameConsumer([&delivered](SessionFrame&&, unsigned) { delivered.fetch_add(1); });
+    controller.setFrameContextSource(source);
+
+    const auto live = awaitState(controller, [&](auto done) {
+        return controller.requestLiveStart(controller.currentConnectionId(9), done);
+    });
+    QCOMPARE(live.error, DeviceConnectionError::None);
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+
+    GoPxLSdk::GoDataSet dataSet;
+    dataSet.Add(GoGdpMsgTests::monoPixel());
+    auto callbackWorker = std::async(std::launch::async, [&] {
+        gocator.receiveDataForTest(dataSet);
+    });
+
+    QCOMPARE(enteredFuture.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    QCOMPARE(source->liveAllocations.load(), std::size_t{1});
+
+    // Stopping while the builder/context is open revokes the run; once unblocked, it must abort
+    // under RAII without publishing or retaining the backing.
+    controller.stop();
+    release->set_value();
+    callbackWorker.wait();
+
+    QCOMPARE(delivered.load(), std::size_t{0});
+    QCOMPARE(source->liveAllocations.load(), std::size_t{0});
+}
+
+void GocatorConnectionControlTests::stopAndRearmIgnoresLateCallbackFromOldRun()
+{
+    Gocator gocator;
+    GocatorSourceController controller(&gocator);
+    std::atomic<bool> grabbing{false};
+    bindSyntheticGocator(controller, grabbing);
+
+    auto source = std::make_shared<ScriptedContextSource>();
+    auto entered = std::make_shared<std::promise<void>>();
+    auto enteredFuture = entered->get_future();
+    auto release = std::make_shared<std::promise<void>>();
+    auto releaseFuture = release->get_future().share();
+    std::atomic<bool> blockFirst{true};
+    source->onAfterBeginFrame = [&blockFirst, entered, releaseFuture]() {
+        if (blockFirst.exchange(false)) {
+            entered->set_value();
+            releaseFuture.wait();
+        }
+    };
+
+    std::vector<std::uint64_t> deliveredIndices;
+    std::mutex deliveredMutex;
+    controller.setFrameConsumer([&](SessionFrame&& frame, unsigned) {
+        std::lock_guard<std::mutex> lock(deliveredMutex);
+        deliveredIndices.push_back(frame.payload.metadata().frameIndex);
+    });
+    controller.setFrameContextSource(source);
+
+    // Run 1 (Live): starts and enters beginFrame on a background thread.
+    QCOMPARE(awaitState(controller, [&](auto done) {
+        return controller.requestLiveStart(controller.currentConnectionId(9), done);
+    }).error, DeviceConnectionError::None);
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+
+    GoPxLSdk::GoDataSet oldDataSet;
+    auto oldImg = GoGdpMsgTests::monoPixel();
+    oldDataSet.Add(oldImg);
+    auto oldWorker = std::async(std::launch::async, [&] {
+        gocator.receiveDataForTest(oldDataSet);
+    });
+    QCOMPARE(enteredFuture.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+
+    // Stop Run 1 while its callback is still blocked, then arm Run 2 (Single) while Run 1 is
+    // still unwinding. Run 1's late callback must abort without completing Run 2's Single.
+    controller.stop();
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
+
+    auto singlePromise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto singleFuture = singlePromise->get_future();
+    QCOMPARE(controller.requestSingle(controller.currentConnectionId(9), [singlePromise](DeviceConnectionResult result) {
+        singlePromise->set_value(std::move(result));
+    }).error, DeviceConnectionError::None);
+    QTRY_VERIFY(controller._singleInFlight.load());
+
+    release->set_value();
+    oldWorker.wait();
+    {
+        std::lock_guard<std::mutex> lock(deliveredMutex);
+        QVERIFY(deliveredIndices.empty());
+    }
+    QCOMPARE(singleFuture.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+
+    QTRY_VERIFY(grabbing.load());
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+
+    GoPxLSdk::GoDataSet newDataSet;
+    newDataSet.Add(GoGdpMsgTests::monoPixel());
+    gocator.receiveDataForTest(newDataSet);
+    grabbing.store(false);
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
+
+    const auto singleResult = singleFuture.get();
+    QCOMPARE(singleResult.error, DeviceConnectionError::None);
+    {
+        std::lock_guard<std::mutex> lock(deliveredMutex);
+        QCOMPARE(deliveredIndices.size(), std::size_t{1});
+    }
+    QCOMPARE(source->liveAllocations.load(), std::size_t{0});
 }
 
 QTEST_MAIN(GocatorConnectionControlTests)

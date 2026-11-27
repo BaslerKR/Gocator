@@ -5,6 +5,7 @@
 
 #include <GoPxLSdk/GoDataSet.h>
 
+#include <atomic>
 #include <exception>
 #include <memory>
 #include <string>
@@ -26,34 +27,57 @@ namespace {
 class GocatorGraphicsFrameStream::Impl final
 {
 public:
-    Impl(Gocator* gocator, GraphicsFrameCallback callback, RejectedRange rejectedRange,
-         RejectedImage rejectedImage);
+    Impl(Gocator* gocator,
+         std::shared_ptr<GraphicsFrameContextSource> contextSource,
+         GraphicsFrameCallback callback,
+         RejectedRange rejectedRange,
+         RejectedImage rejectedImage,
+         StorageOutcome storageOutcome,
+         std::shared_ptr<const std::atomic<bool>> cancelled);
     ~Impl();
 
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
 
-    void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider)
+    void cancel() noexcept
     {
-        _adapter.setFrameStorageProvider(std::move(provider));
+        _localCancelled.store(true, std::memory_order_release);
     }
 
 private:
     Gocator* _gocator = nullptr;
+    std::shared_ptr<GraphicsFrameContextSource> _contextSource;
     GraphicsFrameCallback _callback;
+    StorageOutcome _storageOutcome;
+    std::shared_ptr<const std::atomic<bool>> _externalCancelled;
+    std::atomic<bool> _localCancelled{false};
+    std::atomic<bool> _stickyRefused{false};
     GocatorDataSetGraphicsFrameAdapter _adapter;
     GraphicsFrameCallbackGate _callbackGate;
     Gocator::CallbackId _grabCallbackId = 0;
+
+    [[nodiscard]] bool isCancelled() const noexcept
+    {
+        return _localCancelled.load(std::memory_order_acquire)
+            || (_externalCancelled && _externalCancelled->load(std::memory_order_acquire));
+    }
 };
 
 GocatorGraphicsFrameStream::Impl::Impl(
     Gocator* gocator,
+    std::shared_ptr<GraphicsFrameContextSource> contextSource,
     GraphicsFrameCallback callback,
     RejectedRange rejectedRange,
-    RejectedImage rejectedImage)
-    : _gocator(gocator), _callback(std::move(callback))
+    RejectedImage rejectedImage,
+    StorageOutcome storageOutcome,
+    std::shared_ptr<const std::atomic<bool>> cancelled)
+    : _gocator(gocator),
+      _contextSource(std::move(contextSource)),
+      _callback(std::move(callback)),
+      _storageOutcome(std::move(storageOutcome)),
+      _externalCancelled(std::move(cancelled))
 {
-    if (!_gocator || !_callback)
+    if (!_gocator || !_contextSource || !_callback)
     {
         return;
     }
@@ -65,12 +89,32 @@ GocatorGraphicsFrameStream::Impl::Impl(
             const GoPxLSdk::GoDataSet& dataSet, const std::size_t sequence) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
             if (!lease) return;
+            if (isCancelled() || _stickyRefused.load(std::memory_order_acquire))
+            {
+                return;
+            }
             try
             {
                 GocatorRangeRejection rejection;
                 GocatorImageRejection imageRejection;
+                GraphicsFrameError storageError = GraphicsFrameError::None;
+                const auto* activeCancel = _externalCancelled ? _externalCancelled.get() : &_localCancelled;
                 auto frame = _adapter.convertFrameWithRejection(
-                    dataSet, gocatorGraphicsFrameRequest(), rejection, &imageRejection, sequence);
+                    dataSet, gocatorGraphicsFrameRequest(), *_contextSource,
+                    rejection, &imageRejection, sequence, &storageError, activeCancel);
+                if (storageError == GraphicsFrameError::ClassRefused
+                    || storageError == GraphicsFrameError::Capacity)
+                {
+                    _stickyRefused.store(true, std::memory_order_release);
+                }
+                if (storageError != GraphicsFrameError::None && _storageOutcome)
+                {
+                    _storageOutcome(storageError);
+                }
+                if (isCancelled())
+                {
+                    return;
+                }
                 if (rejectedRange && rejection.reason != GocatorRangeRejection::Reason::None)
                     rejectedRange(rejection, sequence);
                 if (rejectedImage && imageRejection.reason != GraphicsImageFailure::None)
@@ -94,6 +138,7 @@ GocatorGraphicsFrameStream::Impl::Impl(
 
 GocatorGraphicsFrameStream::Impl::~Impl()
 {
+    _localCancelled.store(true, std::memory_order_release);
     _callbackGate.beginShutdown();
     if (_gocator && _grabCallbackId != 0U)
     {
@@ -104,17 +149,21 @@ GocatorGraphicsFrameStream::Impl::~Impl()
 
 GocatorGraphicsFrameStream::GocatorGraphicsFrameStream(
     Gocator* gocator,
+    std::shared_ptr<GraphicsFrameContextSource> contextSource,
     GraphicsFrameCallback callback,
     RejectedRange rejectedRange,
-    RejectedImage rejectedImage)
-    : _impl(std::make_unique<Impl>(gocator, std::move(callback), std::move(rejectedRange),
-        std::move(rejectedImage)))
+    RejectedImage rejectedImage,
+    StorageOutcome storageOutcome,
+    std::shared_ptr<const std::atomic<bool>> cancelled)
+    : _impl(std::make_unique<Impl>(gocator, std::move(contextSource), std::move(callback),
+        std::move(rejectedRange), std::move(rejectedImage), std::move(storageOutcome),
+        std::move(cancelled)))
 {
 }
 
 GocatorGraphicsFrameStream::~GocatorGraphicsFrameStream() = default;
 
-void GocatorGraphicsFrameStream::setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider)
+void GocatorGraphicsFrameStream::cancel() noexcept
 {
-    if (_impl) _impl->setFrameStorageProvider(std::move(provider));
+    if (_impl) _impl->cancel();
 }

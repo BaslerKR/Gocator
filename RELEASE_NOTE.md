@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Migrate `GocatorSourceController`, `GocatorGraphicsFrameStream`, and `GocatorDataSetGraphicsFrameAdapter` to `IFrameContextClient` (`org.playground.DeviceRuntime.FrameContextClient/1`) and `GraphicsFrameContextSource::beginFrame`, removing legacy `IFrameStorageClient`/`FrameStorage` paths, planning exact image+range destination bounds with `planGraphicsImageWrite`/`planGraphicsRangeWrite`, and handling `NoReadyCredit`, `ClassRefused`, cancellation, and stop/rearm run fencing.
+
 - Drop the removed `GraphicsRangeFrameWriterFailure::MisalignedStorage` case and the unreachable `StorageMisaligned` range rejection in `GocatorDataSetGraphicsFrameAdapter` and adopt `DevicePluginSessionCapability::GraphicsViewer`.
 
 - Publish immutable GraphicsFrame handles with builder-backed image and range spans while preserving single-lease frame storage and one-copy device conversion.

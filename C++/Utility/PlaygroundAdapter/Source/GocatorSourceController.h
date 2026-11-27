@@ -4,7 +4,7 @@
 #include "DeviceRuntime/Contract/DeviceConnectionControl.h"
 #include "DeviceRuntime/Contract/DeviceImageDiagnostics.h"
 #include "DeviceRuntime/Contract/DeviceParameterControl.h"
-#include "DeviceRuntime/Contract/FrameStorage.h"
+#include "DeviceRuntime/Contract/FrameContextClient.h"
 #include "GocatorParameterNotifications.h"
 #include "GocatorParameterTree.h"
 #include "engine/GraphicsFrameAdapter.h"
@@ -25,9 +25,9 @@ struct GocatorRangeRejection;
 struct GocatorImageRejection;
 
 class GocatorSourceController : public AbstractSourceController, public IDeviceParameterControl, public IDeviceConnectionControl,
-                                public IFrameStorageClient {
+                                public IFrameContextClient {
     Q_OBJECT
-    Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl IFrameStorageClient)
+    Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl IFrameContextClient)
 public:
     using ParameterCompletion = IDeviceParameterControl::Completion;
     using ChangeListener = IDeviceParameterControl::ChangeListener;
@@ -83,8 +83,10 @@ public:
     /** @brief Admits stopping continuous acquisition on the exact connection. */
     DeviceConnectionResult requestLiveStop(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
 
-    /** @brief Accepts the storage its 3D frames should be written into. */
-    void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider) override;
+    /** @brief Installs or clears the whole-frame context source used for subsequent acquisitions. */
+    void setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source) override;
+    /** @brief Copies frames dropped due to frame-context exhaustion or storage refusal in the current run. */
+    [[nodiscard]] std::uint64_t droppedFrames() const noexcept;
 
 signals:
     /** @brief Publishes a completed discovery cache change for presentation observers. */
@@ -207,8 +209,10 @@ private:
     bool beginLive();
     /** @brief Starts one acquisition run through the shared SDK seam. */
     bool beginGrab(std::size_t frames);
-    /** @brief Reports one producer frame so a pending single can complete. */
-    void noteAcquisitionFrame();
+    /** @brief Reports one producer frame for @p runGeneration so a matching pending single can complete. */
+    void noteAcquisitionFrame(std::uint64_t runGeneration = 0);
+    /** @brief Records a storage refusal message on the active single run when its generation matches. */
+    void noteSingleStorageFailure(std::uint64_t runGeneration, std::string message);
     /** @brief Reports the producer's end transition so a pending single can complete. */
     void noteAcquisitionEnded();
     /** @brief Wakes a pending single with the explicit stopped outcome. */
@@ -218,6 +222,29 @@ private:
     /** @brief Builds the opaque id from this controller and the module connection generation. */
     std::string currentConnectionId(std::uint64_t generation) const;
     std::optional<Gocator::DeviceInfo> cachedTarget(const std::string& targetId) const;
+
+    struct ContextSourceState {
+        std::shared_ptr<GraphicsFrameContextSource> source;
+        mutable std::mutex mutex;
+        std::atomic<GraphicsFrameError> stickyError{GraphicsFrameError::None};
+        std::string stickyMessage;
+    };
+    struct AcquisitionRun {
+        std::uint64_t generation = 0;
+        std::atomic<bool> active{true};
+        std::atomic<bool> cancelled{false};
+        std::shared_ptr<ContextSourceState> contextState;
+    };
+
+    [[nodiscard]] std::shared_ptr<ContextSourceState> activeContextSource(std::string* error) const;
+    static void recordStickyContextFailure(
+        const std::shared_ptr<ContextSourceState>& state,
+        GraphicsFrameError error,
+        std::string message);
+    [[nodiscard]] bool isConnectedForGrab() const;
+    void revokeActiveRun();
+    void rebuildGraphicsStream(const std::shared_ptr<AcquisitionRun>& run);
+
     LifecycleBackend _lifecycle;
     bool _lifecycleAvailable = false;
     QFuture<void> _controlWork;
@@ -226,14 +253,17 @@ private:
     FrameConsumer _frameConsumer;
     std::atomic<bool> _isGrabbing{false};
     std::atomic<uint64_t> _frameSeq{0};
+    std::atomic<uint64_t> _droppedFrames{0};
 
     /** @brief One admitted single run; the producer's frame and end transitions share it. */
     struct SingleRun {
         std::mutex mutex;
         std::condition_variable condition;
+        std::uint64_t generation = 0;
         bool delivered = false;
         bool ended = false;
         bool stopped = false;
+        std::string failureMessage;
     };
     std::shared_ptr<SingleRun> _singleRun;
     std::mutex _singleMutex;
@@ -243,8 +273,12 @@ private:
 
     Gocator::CallbackId _statusCallbackId = 0;
     GraphicsFrameCallbackGate _statusCallbackGate;
+    mutable std::mutex _contextMutex;
+    std::shared_ptr<ContextSourceState> _contextSourceState;
+    std::shared_ptr<AcquisitionRun> _activeRun;
+    std::uint64_t _runGeneration = 0;
+    std::mutex _streamMutex;
     std::unique_ptr<GocatorGraphicsFrameStream> _graphicsStream;
-    std::shared_ptr<IFrameStorageProvider> _frameStorage;
     const DeviceRangeRejectionSink _rangeRejectionSink;
     const DeviceImageRejectionSink _imageRejectionSink;
     std::array<std::atomic<std::uint64_t>,

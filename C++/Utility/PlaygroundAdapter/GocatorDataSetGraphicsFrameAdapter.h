@@ -5,16 +5,15 @@
  * @brief LMI Gocator GDP dataset adapter for neutral GraphicsFrame data.
  */
 
-#include "engine/GraphicsFrameAdapter.h"
+#include "engine/GraphicsFrame.h"
+#include "engine/GraphicsFrameContext.h"
 #include "engine/GraphicsImageWriter.h"
 #include "Gocator.h"
 
-#include <memory>
-#include <mutex>
-#include <optional>
+#include <atomic>
+#include <cstdint>
 #include <limits>
-
-class IFrameStorageProvider;
+#include <optional>
 
 namespace GoPxLSdk
 {
@@ -53,38 +52,34 @@ struct GocatorImageRejection {
 };
 
 class GocatorDataSetGraphicsFrameAdapter final
-    : public GraphicsFrameAdapter<GocatorDataSetGraphicsFrameAdapter, GoPxLSdk::GoDataSet>
 {
 public:
     GocatorDataSetGraphicsFrameAdapter() = default;
     ~GocatorDataSetGraphicsFrameAdapter() = default;
 
-    using GraphicsFrameAdapter<GocatorDataSetGraphicsFrameAdapter, GoPxLSdk::GoDataSet>::convertFrame;
+    [[nodiscard]] std::optional<GraphicsFrame> convertFrame(
+        const GoPxLSdk::GoDataSet& dataSet,
+        const GraphicsFrameRequest& request,
+        GraphicsFrameContextSource& contextSource) const;
 
     [[nodiscard]] std::optional<GraphicsFrame> convertFrameWithRejection(
-        const GoPxLSdk::GoDataSet& dataSet, const GraphicsFrameRequest& request,
-        GocatorRangeRejection& rejection, GocatorImageRejection* imageRejection = nullptr,
-        std::optional<std::uint64_t> frameIndex = std::nullopt) const;
-
-    /**
-     * @brief Sets the provider that leases one slot for every stored component of a frame.
-     *
-     * A frame with a range and a valid image asks the provider once and writes both at the planned
-     * offsets of that single lease. A refused plan drops the frame; the adapter never retries
-     * component by component. A null provider restores ordinary per-component allocation.
-     */
-    void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider);
+        const GoPxLSdk::GoDataSet& dataSet,
+        const GraphicsFrameRequest& request,
+        GraphicsFrameContextSource& contextSource,
+        GocatorRangeRejection& rejection,
+        GocatorImageRejection* imageRejection = nullptr,
+        std::optional<std::uint64_t> frameIndex = std::nullopt,
+        GraphicsFrameError* storageError = nullptr,
+        const std::atomic<bool>* cancelled = nullptr) const;
 
 private:
-    friend class GraphicsFrameAdapter<GocatorDataSetGraphicsFrameAdapter, GoPxLSdk::GoDataSet>;
-
     [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
         const GoPxLSdk::GoDataSet& dataSet,
         const GraphicsFrameRequest& request,
+        GraphicsFrameContextSource& contextSource,
         GocatorRangeRejection* rejection = nullptr,
         GocatorImageRejection* imageRejection = nullptr,
-        std::optional<std::uint64_t> frameIndex = std::nullopt) const;
-
-    mutable std::mutex _storageMutex;
-    std::shared_ptr<IFrameStorageProvider> _provider;
+        std::optional<std::uint64_t> frameIndex = std::nullopt,
+        GraphicsFrameError* storageError = nullptr,
+        const std::atomic<bool>* cancelled = nullptr) const;
 };

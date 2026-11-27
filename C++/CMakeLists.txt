@@ -218,13 +218,6 @@ if(GOCATOR_BUILD_PLAYGROUND_ADAPTER)
         )
     endif()
 
-    if(NOT TARGET Playground::DeviceRuntimeContract)
-        message(FATAL_ERROR
-            "[Gocator] GOCATOR_BUILD_PLAYGROUND_ADAPTER=ON requires "
-            "Playground::DeviceRuntimeContract for the frame storage plan."
-        )
-    endif()
-
     find_package(OpenMP REQUIRED COMPONENTS CXX)
     add_library(GocatorPlaygroundAdapter STATIC
         Utility/PlaygroundAdapter/GocatorDataSetGraphicsFrameAdapter.h
@@ -243,7 +236,6 @@ if(GOCATOR_BUILD_PLAYGROUND_ADAPTER)
         PUBLIC
             gocator_core
             GraphicsEngine::Contracts
-            Playground::DeviceRuntimeContract
         PRIVATE
             OpenMP::OpenMP_CXX
     )
