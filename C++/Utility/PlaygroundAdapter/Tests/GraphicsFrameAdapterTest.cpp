@@ -33,7 +33,7 @@
 
 namespace {
 
-static_assert(std::is_const_v<std::remove_reference_t<decltype(std::declval<const GraphicsFrame&>().images())>>);
+static_assert(std::is_const_v<std::remove_reference_t<decltype(std::declval<const GraphicsFrame&>().images().front())>>);
 static_assert(std::is_const_v<std::remove_reference_t<decltype(*std::declval<GraphicsSpan<std::uint8_t>>().data())>>);
 
 /** Managed test backing that tracks live references and enforces exact sample limits. */
