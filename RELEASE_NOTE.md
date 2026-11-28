@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Drop a frame refused by the frame context (ClassRefused or Capacity) without latching a refusal so acquisition continues and the next frame asks again, and skip only the image or range whose size overflows the frame total while recording its diagnostic.
+
 - Migrate `GocatorSourceController`, `GocatorGraphicsFrameStream`, and `GocatorDataSetGraphicsFrameAdapter` to `IFrameContextClient` (`org.playground.DeviceRuntime.FrameContextClient/1`) and `GraphicsFrameContextSource::beginFrame`, removing legacy `IFrameStorageClient`/`FrameStorage` paths, planning exact image+range destination bounds with `planGraphicsImageWrite`/`planGraphicsRangeWrite`, and handling `NoReadyCredit`, `ClassRefused`, cancellation, and stop/rearm run fencing.
 
 - Drop the removed `GraphicsRangeFrameWriterFailure::MisalignedStorage` case and the unreachable `StorageMisaligned` range rejection in `GocatorDataSetGraphicsFrameAdapter` and adopt `DevicePluginSessionCapability::GraphicsViewer`.
