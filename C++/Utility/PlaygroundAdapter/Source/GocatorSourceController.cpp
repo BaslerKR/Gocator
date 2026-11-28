@@ -320,6 +320,8 @@ void GocatorSourceController::noteSingleStorageFailure(
         if (runGeneration != 0 && run->generation != 0 && run->generation != runGeneration) return;
         if (run->failureMessage.empty()) run->failureMessage = std::move(message);
     }
+    // A refused frame completes the Single now; it does not wait for the acquisition to end.
+    run->condition.notify_all();
 }
 
 void GocatorSourceController::noteAcquisitionEnded() {
@@ -429,7 +431,8 @@ void GocatorSourceController::rebuildGraphicsStream(const std::shared_ptr<Acquis
             _droppedFrames.fetch_add(1, std::memory_order_relaxed);
             return;
         }
-        if (err == GraphicsFrameError::ClassRefused || err == GraphicsFrameError::Capacity) {
+        if (err == GraphicsFrameError::ClassRefused || err == GraphicsFrameError::Capacity
+            || err == GraphicsFrameError::ClassNotPrepared) {
             _droppedFrames.fetch_add(1, std::memory_order_relaxed);
             // Only this frame is dropped; acquisition keeps running and the next frame asks again.
             // The log line is surfaced once per run.
@@ -869,18 +872,22 @@ DeviceConnectionResult GocatorSourceController::admitLifecycle(Lifecycle operati
                         std::unique_lock<std::mutex> lock(singleRun->mutex);
                         if (started || singleRun->delivered)
                             singleRun->condition.wait_for(lock, std::chrono::seconds(30),
-                                [&] { return singleRun->ended || singleRun->stopped; });
+                                [&] {
+                                    return singleRun->ended || singleRun->stopped
+                                        || (!singleRun->delivered && !singleRun->failureMessage.empty());
+                                });
                         stopped = singleRun->stopped;
                         delivered = singleRun->delivered;
                         ended = singleRun->ended;
                         storageFailure = singleRun->failureMessage;
                     }
-                    if (stopped && started && !ended) stop();
+                    const bool refused = !delivered && !storageFailure.empty();
+                    if ((stopped || refused) && started && !ended) stop();
                     if (!started && !delivered && !ended && !stopped) {
                         result = {DeviceConnectionError::Unavailable,
                             "The Gocator could not start a single grab.",
                             DeviceConnectionEffect::None, copiedState()};
-                    } else if (!ended && !stopped) {
+                    } else if (!ended && !stopped && !refused) {
                         stop();
                         result = {DeviceConnectionError::Timeout,
                             "Single acquisition did not finish within 30 s; accepted effects may have occurred.",

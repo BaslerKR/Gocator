@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Stop rejecting frame data in `GocatorDataSetGraphicsFrameAdapter`: every image and range part is fitted into a valid GraphicsEngine layout and published (unknown or odd-width formats and unsupported sample item sizes as raw Mono8, short buffers zero-filled at their declared size, narrow strides and mismatched grids copied row by row, zero declared dimensions fitted to the delivered array), one bad part never removes another, only a part without bytes is absent, and every anomaly is counted in a fixed-capacity per-frame record reported through the existing range and image diagnostic sinks. A Single completes immediately with the refusal reason when the frame context refuses its frame (`ClassRefused`, `Capacity` or `ClassNotPrepared`) instead of waiting for the acquisition to end or the 30 s deadline.
+
 - Drop a frame refused by the frame context (ClassRefused or Capacity) without latching a refusal so acquisition continues and the next frame asks again, and skip only the image or range whose size overflows the frame total while recording its diagnostic.
 
 - Migrate `GocatorSourceController`, `GocatorGraphicsFrameStream`, and `GocatorDataSetGraphicsFrameAdapter` to `IFrameContextClient` (`org.playground.DeviceRuntime.FrameContextClient/1`) and `GraphicsFrameContextSource::beginFrame`, removing legacy `IFrameStorageClient`/`FrameStorage` paths, planning exact image+range destination bounds with `planGraphicsImageWrite`/`planGraphicsRangeWrite`, and handling `NoReadyCredit`, `ClassRefused`, cancellation, and stop/rearm run fencing.
@@ -14,11 +16,11 @@
 
 - Complete Single only after the adapter hands off a usable frame and acquisition stops. Preserve Stop failures in the command result and release the local connection on Disconnect even when device Stop fails. Bind automatic finite-grab stops to their own acquisition.
 
-- Reject surface arrays that disagree with the declared grid and omit mismatched auxiliary intensity. Report the full required image extent for short rows and store only declared image rows.
+- Report the full required image extent for short rows and store only declared image rows.
 
-- Convert Gocator GDP image-only replay messages into owned GraphicsImage payloads for common Mono, Bayer, RGB/BGR and RGBA/BGRA formats, preserve word-aligned source bit widths, and report image rejection evidence through the device image diagnostics contract. GEV 12-packed layouts that differ from PFNC are refused rather than misdecoded.
+- Convert Gocator GDP image-only replay messages into owned GraphicsImage payloads for common Mono, Bayer, RGB/BGR and RGBA/BGRA formats, preserve word-aligned source bit widths, and report image anomaly evidence through the device image diagnostics contract.
 
-- Support GoPxL PC and Emulator replay jobs without scan engines by selecting one authoritative GDP output, preferring profile range sources, falling back to surface range sources, and using an image source only when no range source exists. A dataset with a usable range candidate publishes the range together with the first valid image in one frame whose components share a single planned frame-storage lease and are published in place. A dataset whose image is invalid publishes range-only and still reports the image rejection, a damaged range candidate suppresses image fallback, and an image-only dataset publishes the image alone. A refused storage plan drops the whole frame once, without retrying component by component.
+- Support GoPxL PC and Emulator replay jobs without scan engines by selecting one authoritative GDP output, preferring profile range sources, falling back to surface range sources, and using an image source only when no range source exists. A dataset with a usable range candidate publishes the range together with the first valid image in one frame whose components share a single planned frame-storage lease and are published in place. A dataset whose image is damaged publishes the fitted image beside the range and still reports the anomaly, and an image-only dataset publishes the image alone. A refused storage plan drops the whole frame once, without retrying component by component.
 
 - Encode non-default control ports in connection target IDs, keep same-address PC instances and Emulators distinct, refuse ambiguous port-less targets, and list only local discovery entries with an address, usable control and GDP ports, and no address conflict. Log every reported device.
 

@@ -38,11 +38,25 @@ public:
         kArray2_DataT(image->pixels.Get(), k8u)[0] = 42;
         return image;
     }
+
+    /** A pixel whose format the adapter does not know: it is published as raw Mono8 bytes. */
+    static std::shared_ptr<GoPxLSdk::GoGdpImage> unknownFormatPixel()
+    {
+        auto image = monoPixel();
+        image->pixelFormat = GoPxLSdk::GoGdpPixelFormat::Null_Format;
+        return image;
+    }
 };
 
 namespace {
 
 std::vector<DeviceImageRejectionObservation> imageObservations;
+std::vector<DeviceRangeRejectionObservation> rangeObservations;
+
+void collectRangeObservation(const DeviceRangeRejectionObservation& observation) noexcept
+{
+    rangeObservations.push_back(observation);
+}
 
 void collectImageObservation(const DeviceImageRejectionObservation& observation) noexcept
 {
@@ -102,6 +116,8 @@ private slots:
     void frameContextRequiredWithoutFallback();
     void frameContextTransactionAndNoReadyCreditDrop();
     void frameContextRefusalDropsOnlyThatFrame();
+    void singleCompletesPromptlyAfterStorageRefusal();
+    void frameAnomaliesReachTheDiagnosticSinks();
     void cancellationOrStopReleasesOpenBuilder();
     void stopAndRearmIgnoresLateCallbackFromOldRun();
 
@@ -1283,14 +1299,13 @@ void GocatorConnectionControlTests::frameContextRefusalDropsOnlyThatFrame()
     const std::string connectionId = controller.currentConnectionId(9);
     source->nextError.store(GraphicsFrameError::ClassRefused, std::memory_order_release);
 
-    auto singlePromise = std::make_shared<std::promise<DeviceConnectionResult>>();
-    auto singleFuture = singlePromise->get_future();
-    QCOMPARE(controller.requestSingle(connectionId, [singlePromise](DeviceConnectionResult result) {
-        singlePromise->set_value(std::move(result));
-    }).error, DeviceConnectionError::None);
-    QTRY_VERIFY(controller._singleInFlight.load());
-    QTRY_VERIFY(grabbing.load());
-
+    // A Live run keeps acquiring after a refusal, so it still exercises "drop only that frame".
+    // A Single completes at its first refusal; that is covered by
+    // singleCompletesPromptlyAfterStorageRefusal.
+    const auto live = awaitState(controller, [&](auto done) {
+        return controller.requestLiveStart(connectionId, done);
+    });
+    QCOMPARE(live.error, DeviceConnectionError::None);
     gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
     GoPxLSdk::GoDataSet dataSet;
     dataSet.Add(GoGdpMsgTests::monoPixel());
@@ -1306,10 +1321,8 @@ void GocatorConnectionControlTests::frameContextRefusalDropsOnlyThatFrame()
     QCOMPARE(source->calls.load(), std::size_t{2});
     QCOMPARE(delivered.load(), std::size_t{1});
 
-    grabbing.store(false);
+    controller.stop();
     gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
-    const auto accepted = singleFuture.get();
-    QCOMPARE(accepted.error, DeviceConnectionError::None);
 
     // A Single whose only dataset was refused reports the refusal; it does not latch, so the
     // following Single asks the source again and succeeds.
@@ -1323,6 +1336,8 @@ void GocatorConnectionControlTests::frameContextRefusalDropsOnlyThatFrame()
     QTRY_VERIFY(grabbing.load());
     gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
     gocator.receiveDataForTest(dataSet);
+    // The refusal completes the Single before the acquisition reports that it ended.
+    QCOMPARE(refusedFuture.wait_for(std::chrono::seconds(10)), std::future_status::ready);
     grabbing.store(false);
     gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
     const auto refused = refusedFuture.get();
@@ -1346,6 +1361,90 @@ void GocatorConnectionControlTests::frameContextRefusalDropsOnlyThatFrame()
     const auto ok = okFuture.get();
     QCOMPARE(ok.error, DeviceConnectionError::None);
     QCOMPARE(delivered.load(), std::size_t{2});
+}
+
+void GocatorConnectionControlTests::singleCompletesPromptlyAfterStorageRefusal()
+{
+    struct Case { GraphicsFrameError error; const char* reason; };
+    const Case cases[] = {
+        {GraphicsFrameError::ClassRefused, "class refused by host"},
+        {GraphicsFrameError::Capacity, "exceeds capacity"},
+        {GraphicsFrameError::ClassNotPrepared, "not prepared"},
+    };
+    for (const auto& refusal : cases) {
+        Gocator gocator;
+        GocatorSourceController controller(&gocator);
+        std::atomic<bool> grabbing{false};
+        bindSyntheticGocator(controller, grabbing);
+        auto source = std::make_shared<ScriptedContextSource>();
+        std::atomic<std::size_t> delivered{0};
+        controller.setFrameConsumer([&delivered](SessionFrame&&, unsigned) { delivered.fetch_add(1); });
+        controller.setFrameContextSource(source);
+        source->nextError.store(refusal.error, std::memory_order_release);
+
+        auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+        auto future = promise->get_future();
+        QCOMPARE(controller.requestSingle(controller.currentConnectionId(9),
+            [promise](DeviceConnectionResult result) { promise->set_value(std::move(result)); }).error,
+            DeviceConnectionError::None);
+        QTRY_VERIFY(controller._singleInFlight.load());
+        QTRY_VERIFY(grabbing.load());
+        gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+        GoPxLSdk::GoDataSet dataSet;
+        dataSet.Add(GoGdpMsgTests::monoPixel());
+        gocator.receiveDataForTest(dataSet);
+
+        // The Single completes at the refusal: no 30 s deadline, no wait for the acquisition end
+        // notification, which this test deliberately never sends before the result is ready.
+        QCOMPARE(future.wait_for(std::chrono::seconds(10)), std::future_status::ready);
+        const auto result = future.get();
+        QCOMPARE(result.error, DeviceConnectionError::BackendFailure);
+        QVERIFY2(result.message.find(refusal.reason) != std::string::npos, result.message.c_str());
+        QCOMPARE(result.effect, DeviceConnectionEffect::Applied);
+        QCOMPARE(delivered.load(), std::size_t{0});
+        QCOMPARE(controller._droppedFrames.load(), std::uint64_t{1});
+        QVERIFY(!grabbing.load());
+        gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
+    }
+}
+
+void GocatorConnectionControlTests::frameAnomaliesReachTheDiagnosticSinks()
+{
+    imageObservations.clear();
+    rangeObservations.clear();
+    Gocator gocator;
+    GocatorSourceController controller(&gocator, nullptr, &collectRangeObservation, &collectImageObservation);
+    std::atomic<bool> grabbing{false};
+    bindSyntheticGocator(controller, grabbing);
+    auto source = std::make_shared<ScriptedContextSource>();
+    std::atomic<std::size_t> delivered{0};
+    controller.setFrameConsumer([&delivered](SessionFrame&& frame, unsigned) {
+        if (frame.payload.hasImage()) delivered.fetch_add(1);
+    });
+    controller.setFrameContextSource(source);
+
+    const auto live = awaitState(controller, [&](auto done) {
+        return controller.requestLiveStart(controller.currentConnectionId(9), done);
+    });
+    QCOMPARE(live.error, DeviceConnectionError::None);
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+
+    // An image in a format the adapter does not know is still published, as raw bytes, and the
+    // anomaly is counted through the existing image diagnostic sink.
+    GoPxLSdk::GoDataSet dataSet;
+    dataSet.Add(GoGdpMsgTests::unknownFormatPixel());
+    gocator.receiveDataForTest(dataSet);
+    QCOMPARE(delivered.load(), std::size_t{1});
+    QCOMPARE(controller._droppedFrames.load(), std::uint64_t{0});
+    QCOMPARE(imageObservations.size(), std::size_t{1});
+    QCOMPARE(imageObservations.front().reason, DeviceImageRejection::UnsupportedFormat);
+    // The same dataset has no range part: the missing range is counted too and the image stays.
+    QCOMPARE(rangeObservations.size(), std::size_t{1});
+    QCOMPARE(rangeObservations.front().reason, DeviceRangeRejection::MissingRange);
+    QVERIFY(rangeObservations.front().frameRetained && rangeObservations.front().imageRetained);
+
+    controller.stop();
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
 }
 
 void GocatorConnectionControlTests::cancellationOrStopReleasesOpenBuilder()

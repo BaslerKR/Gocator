@@ -96,11 +96,12 @@ GocatorGraphicsFrameStream::Impl::Impl(
             {
                 GocatorRangeRejection rejection;
                 GocatorImageRejection imageRejection;
+                GocatorFrameAnomalies anomalies;
                 GraphicsFrameError storageError = GraphicsFrameError::None;
                 const auto* activeCancel = _externalCancelled ? _externalCancelled.get() : &_localCancelled;
                 auto frame = _adapter.convertFrameWithRejection(
                     dataSet, gocatorGraphicsFrameRequest(), *_contextSource,
-                    rejection, &imageRejection, sequence, &storageError, activeCancel);
+                    rejection, &imageRejection, sequence, &storageError, activeCancel, &anomalies);
                 if (storageError != GraphicsFrameError::None && _storageOutcome)
                 {
                     _storageOutcome(storageError);
@@ -109,10 +110,31 @@ GocatorGraphicsFrameStream::Impl::Impl(
                 {
                     return;
                 }
-                if (rejectedRange && rejection.reason != GocatorRangeRejection::Reason::None)
-                    rejectedRange(rejection, sequence);
-                if (rejectedImage && imageRejection.reason != GraphicsImageFailure::None)
-                    rejectedImage(imageRejection, sequence);
+                // Every anomaly of the dataset is reported; the sinks rate-limit like before.
+                if (rejectedRange) {
+                    for (std::size_t index = 0; index < anomalies.rangeCount; ++index)
+                        rejectedRange(anomalies.ranges[index], sequence);
+                    for (std::size_t reason = 0; reason < anomalies.rangeOverflowByReason.size(); ++reason) {
+                        GocatorRangeRejection overflow;
+                        overflow.reason = static_cast<GocatorRangeRejection::Reason>(reason);
+                        overflow.frameRetained = rejection.frameRetained;
+                        overflow.imageRetained = rejection.imageRetained;
+                        overflow.rangeRetained = rejection.rangeRetained;
+                        for (std::size_t seen = 0; seen < anomalies.rangeOverflowByReason[reason]; ++seen)
+                            rejectedRange(overflow, sequence);
+                    }
+                }
+                if (rejectedImage) {
+                    for (std::size_t index = 0; index < anomalies.imageCount; ++index)
+                        rejectedImage(anomalies.images[index], sequence);
+                    for (std::size_t reason = 0; reason < anomalies.imageOverflowByReason.size(); ++reason) {
+                        GocatorImageRejection overflow;
+                        overflow.reason = static_cast<GraphicsImageFailure>(reason);
+                        overflow.imageRetained = imageRejection.imageRetained;
+                        for (std::size_t seen = 0; seen < anomalies.imageOverflowByReason[reason]; ++seen)
+                            rejectedImage(overflow, sequence);
+                    }
+                }
                 if (frame.has_value())
                 {
                     _callback(std::move(*frame), 0U);

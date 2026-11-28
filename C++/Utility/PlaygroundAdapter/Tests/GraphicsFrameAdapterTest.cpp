@@ -49,6 +49,8 @@ public:
         if (!rawBuffer) return nullptr;
         const auto raw = reinterpret_cast<std::uintptr_t>(rawBuffer);
         auto* aligned = reinterpret_cast<std::byte*>((raw + 63U) & ~std::uintptr_t(63U));
+        // Fresh storage is poisoned so a test can tell zero-filled bytes from untouched ones.
+        std::memset(aligned, 0xAB, capacityBytes);
         auto* alloc = new (std::nothrow) TrackedManagedAllocation(
             rawBuffer, aligned, capacityBytes, domainId, liveCount);
         if (!alloc) delete[] rawBuffer;
@@ -268,6 +270,20 @@ public:
     static void setProfilePointCloudWidth(GoPxLSdk::GoGdpProfilePointCloud& message, k32u width)
     {
         message.width = width;
+    }
+
+    /** Range samples of an item size the adapter cannot interpret (four bytes per sample). */
+    static void setUniformSurfaceInt32(GoPxLSdk::GoGdpSurfaceUniform& message,
+                                       const k32u width,
+                                       const k32u height,
+                                       const std::vector<k32s>& ranges)
+    {
+        assert(ranges.size() == std::size_t(width) * std::size_t(height));
+        message.width = width;
+        message.length = height;
+        kArray2_Construct(message.ranges.Ref(), kTypeOf(k32s), height, width, kNULL);
+        std::memcpy(kArray2_DataT(message.ranges.Get(), k32s), ranges.data(),
+            ranges.size() * sizeof(k32s));
     }
 
     static void setUniformSurface(GoPxLSdk::GoGdpSurfaceUniform& message,
@@ -583,7 +599,12 @@ int main()
         dataSet.Add(image);
         GraphicsFrameRequest imageRequest;
         imageRequest.components = GraphicsFrameComponent::Image;
-        assert(!adapter.convertFrame(dataSet, imageRequest, localSource));
+        // The GEV packed format maps to the nearest GraphicsEngine format instead of being refused.
+        const auto converted = adapter.convertFrame(dataSet, imageRequest, localSource);
+        assert(converted && converted->images().size() == 1U);
+        const auto& result = converted->images().front().payload;
+        assert(result.pixelFormat == GraphicsImagePixelFormat::Mono12Packed);
+        assert(result.stride == 3 && result.pixels.size() == 3U);
     }
 
     {
@@ -610,18 +631,36 @@ int main()
         dataSet.Add(image);
         GraphicsFrameRequest imageRequest;
         imageRequest.components = GraphicsFrameComponent::Image;
-        assert(!adapter.convertFrame(dataSet, imageRequest, localSource));
+        // A pixel size that disagrees with the format is counted, and the pixel is still published.
+        GocatorImageRejection evidence;
+        GocatorFrameAnomalies anomalies;
+        const auto converted = adapter.convertFrameWithRejection(
+            dataSet, imageRequest, localSource, rejection, &evidence, std::nullopt, nullptr, nullptr, &anomalies);
+        assert(converted && converted->images().size() == 1U);
+        assert(converted->images().front().payload.pixelFormat == GraphicsImagePixelFormat::Mono8);
+        assert(converted->images().front().payload.data()[0] == 255U);
+        assert(evidence.reason == GraphicsImageFailure::InvalidStride && evidence.imageRetained);
+        assert(anomalies.imageCount == 1U && anomalies.rangeCount == 0U);
     }
 
     {
         GoPxLSdk::GoDataSet dataSet;
         auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
         GoGdpMsgTests::setImageBuffer(*image, 3, 1, GoPxLSdk::GoGdpPixelFormat::YCbCr422_8,
-            2U, 6U, std::vector<k8u>{0, 0, 0, 0, 0, 0});
+            2U, 6U, std::vector<k8u>{1, 2, 3, 4, 5, 6});
         dataSet.Add(image);
         GraphicsFrameRequest imageRequest;
         imageRequest.components = GraphicsFrameComponent::Image;
-        assert(!adapter.convertFrame(dataSet, imageRequest, localSource));
+        // An odd-width 4:2:2 image has no GraphicsEngine layout; its bytes publish as raw Mono8.
+        GocatorImageRejection evidence;
+        const auto converted = adapter.convertFrameWithRejection(
+            dataSet, imageRequest, localSource, rejection, &evidence);
+        assert(converted && converted->images().size() == 1U);
+        const auto& result = converted->images().front().payload;
+        assert(result.pixelFormat == GraphicsImagePixelFormat::Mono8);
+        assert(result.width == 6 && result.height == 1 && result.pixels.size() == 6U);
+        assert(result.data()[0] == 1U && result.data()[5] == 6U);
+        assert(evidence.reason == GraphicsImageFailure::OddWidth && evidence.imageRetained);
     }
 
     {
@@ -632,7 +671,12 @@ int main()
         dataSet.Add(image);
         GraphicsFrameRequest imageRequest;
         imageRequest.components = GraphicsFrameComponent::Image;
-        assert(!adapter.convertFrame(dataSet, imageRequest, localSource));
+        // An unknown pixel format publishes its raw bytes as Mono8.
+        const auto converted = adapter.convertFrame(dataSet, imageRequest, localSource);
+        assert(converted && converted->images().size() == 1U);
+        const auto& result = converted->images().front().payload;
+        assert(result.pixelFormat == GraphicsImagePixelFormat::Mono8);
+        assert(result.width == 1 && result.height == 1 && result.data()[0] == 1U);
     }
 
     // Image + uniform surface in one managed builder transaction: alignment padding between
@@ -714,7 +758,8 @@ int main()
         GraphicsFrameRequest allRequest;
         allRequest.components = GraphicsFrameComponent::All;
         const auto converted = adapter.convertFrameWithRejection(dataSet, allRequest, localSource, rejection);
-        assert(converted && converted->images().empty() && converted->ranges().size() == 1U);
+        assert(converted && converted->images().size() == 1U && converted->ranges().size() == 1U);
+        assert(converted->images().front().payload.pixelFormat == GraphicsImagePixelFormat::Mono12Packed);
         assert(rejection.reason == Rejection::None && rejection.rangeRetained);
     }
 
@@ -727,10 +772,11 @@ int main()
         GraphicsFrameRequest allRequest;
         allRequest.components = GraphicsFrameComponent::All;
         GocatorImageRejection imageRejection;
-        assert(!adapter.convertFrameWithRejection(
-            dataSet, allRequest, localSource, rejection, &imageRejection).has_value());
-        assert(rejection.reason == Rejection::MissingRange && !rejection.frameRetained);
-        assert(imageRejection.reason == GraphicsImageFailure::UnsupportedFormat);
+        const auto converted = adapter.convertFrameWithRejection(
+            dataSet, allRequest, localSource, rejection, &imageRejection);
+        assert(converted && converted->images().size() == 1U && converted->ranges().empty());
+        assert(rejection.reason == Rejection::MissingRange && rejection.frameRetained);
+        assert(imageRejection.reason == GraphicsImageFailure::UnsupportedFormat && imageRejection.imageRetained);
     }
 
     {
@@ -742,8 +788,14 @@ int main()
         GraphicsFrameRequest request;
         request.components = GraphicsFrameComponent::Image;
         GocatorImageRejection evidence;
-        assert(!adapter.convertFrameWithRejection(dataSet, request, localSource, rejection, &evidence));
-        assert(evidence.reason == GraphicsImageFailure::StrideBelowMinimum);
+        // A narrow source stride is copied row by row into the minimum GraphicsEngine stride.
+        const auto frame = adapter.convertFrameWithRejection(dataSet, request, localSource, rejection, &evidence);
+        assert(frame && frame->images().size() == 1U);
+        const auto& fitted = frame->images().front().payload;
+        assert(fitted.stride == 2 && fitted.pixels.size() == 4U);
+        assert(fitted.data()[0] == 10U && fitted.data()[1] == 0U);
+        assert(fitted.data()[2] == 20U && fitted.data()[3] == 0U);
+        assert(evidence.reason == GraphicsImageFailure::StrideBelowMinimum && evidence.imageRetained);
         assert(evidence.reportedStride == 1U && evidence.minimumRowBytes == 2U);
         assert(evidence.readableBytes == 2U && evidence.requiredBytes == 4U);
     }
@@ -827,9 +879,11 @@ int main()
         GraphicsFrameRequest allRequest;
         allRequest.components = GraphicsFrameComponent::All;
         TrackedContextSource storage;
-        assert(!adapter.convertFrameWithRejection(dataSet, allRequest, storage, rejection).has_value());
+        // A short range no longer drops the frame: both parts publish and the shortfall is counted.
+        const auto converted = adapter.convertFrameWithRejection(dataSet, allRequest, storage, rejection);
+        assert(converted && converted->images().size() == 1U && converted->ranges().size() == 1U);
         assert(rejection.reason == Rejection::TruncatedData);
-        assert(storage.calls == 0U);
+        assert(storage.calls == 1U && storage.usedBytes == storage.requestedBytes);
     }
 
     {
@@ -844,7 +898,7 @@ int main()
         dataSet.Add(shortSurface);
         dataSet.Add(validSurface);
         const auto converted = adapter.convertFrameWithRejection(dataSet, rangeRequest, localSource, rejection);
-        assert(converted && converted->ranges().size() == 1U);
+        assert(converted && converted->ranges().size() == 2U);
         assert(rejection.reason == Rejection::TruncatedData);
         assert(rejection.partCount == 2U && rejection.part == 0U);
         assert(rejection.width == 3U && rejection.height == 1U);
@@ -873,9 +927,11 @@ int main()
         assert(samples >= storage.lastBackingBase && samples < storage.lastBackingBase + storage.usedBytes);
     }
 
-    // Malformed selected messages across all four codecs reject before beginFrame.
+    // Malformed selected messages across all four codecs are fitted and published after one
+    // beginFrame; a message with no sample array at all has no data and publishes nothing.
     {
         TrackedContextSource storage;
+        std::size_t expectedCalls = 0U;
         {
             GoPxLSdk::GoDataSet dataSet;
             auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
@@ -883,8 +939,11 @@ int main()
                 {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {1, 2, 3, 4}, {});
             GoGdpMsgTests::setSurfaceWidth(*surface, 1);
             dataSet.Add(surface);
-            assert(!adapter.convertFrameWithRejection(dataSet, rangeRequest, storage, rejection));
+            const auto frame = adapter.convertFrameWithRejection(dataSet, rangeRequest, storage, rejection);
+            assert(frame && frame->ranges().size() == 1U);
             assert(rejection.reason == Rejection::InvalidLayout);
+            expectArray(frame->ranges().front().payload.zValues, {1.0F, 3.0F}, "narrowed surface Z");
+            ++expectedCalls;
         }
         {
             GoPxLSdk::GoDataSet dataSet;
@@ -893,8 +952,11 @@ int main()
                 {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {{1, 2, 3}, {4, 5, 6}});
             GoGdpMsgTests::setSurfacePointCloudWidth(*cloud, 3);
             dataSet.Add(cloud);
-            assert(!adapter.convertFrameWithRejection(dataSet, rangeRequest, storage, rejection));
+            const auto frame = adapter.convertFrameWithRejection(dataSet, rangeRequest, storage, rejection);
+            assert(frame && frame->ranges().size() == 1U);
             assert(rejection.reason == Rejection::TruncatedData);
+            expectMask(frame->ranges().front().payload.validMask, {1U, 1U, 0U});
+            ++expectedCalls;
         }
         {
             GoPxLSdk::GoDataSet dataSet;
@@ -903,8 +965,12 @@ int main()
                 {1.0, 0.0, 1.0}, {0.0, 0.0, 0.0}, {1, 2});
             GoGdpMsgTests::setUniformProfileWidth(*profile, 4);
             dataSet.Add(profile);
-            assert(!adapter.convertFrameWithRejection(dataSet, rangeRequest, storage, rejection));
+            const auto frame = adapter.convertFrameWithRejection(dataSet, rangeRequest, storage, rejection);
+            assert(frame && frame->ranges().size() == 1U);
             assert(rejection.reason == Rejection::TruncatedData);
+            assert(frame->ranges().front().payload.width == 4);
+            expectMask(frame->ranges().front().payload.validMask, {1U, 1U, 0U, 0U});
+            ++expectedCalls;
         }
         {
             GoPxLSdk::GoDataSet dataSet;
@@ -913,8 +979,11 @@ int main()
                 {1.0, 0.0, 1.0}, {0.0, 0.0, 0.0}, {{1, 2}, {3, 4}});
             GoGdpMsgTests::setProfilePointCloudWidth(*profile, 4);
             dataSet.Add(profile);
-            assert(!adapter.convertFrameWithRejection(dataSet, rangeRequest, storage, rejection));
+            const auto frame = adapter.convertFrameWithRejection(dataSet, rangeRequest, storage, rejection);
+            assert(frame && frame->ranges().size() == 1U);
             assert(rejection.reason == Rejection::TruncatedData);
+            expectMask(frame->ranges().front().payload.validMask, {1U, 1U, 0U, 0U});
+            ++expectedCalls;
         }
         {
             GoPxLSdk::GoDataSet dataSet;
@@ -922,7 +991,7 @@ int main()
             assert(!adapter.convertFrameWithRejection(dataSet, rangeRequest, storage, rejection));
             assert(rejection.reason == Rejection::InvalidDimensions);
         }
-        assert(storage.calls == 0U);
+        assert(storage.calls == expectedCalls);
     }
 
     {
@@ -931,9 +1000,11 @@ int main()
         GoGdpMsgTests::setUniformSurface(*surface, 1, 2,
             {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {1, 2}, {10, 20, 30, 40}, 2, 2);
         dataSet.Add(surface);
-        const auto frame = adapter.convertFrame(dataSet, rangeRequest, localSource);
+        // A differently sized intensity grid is fitted to the range grid and counted.
+        const auto frame = adapter.convertFrameWithRejection(dataSet, rangeRequest, localSource, rejection);
         assert(frame && frame->ranges().size() == 1U);
-        assert(frame->ranges().front().payload.intensity.empty());
+        assert(rejection.reason == Rejection::InvalidLayout);
+        expectArray(frame->ranges().front().payload.intensity, {10.0F, 30.0F}, "fitted intensity");
     }
 
     {
@@ -1181,7 +1252,7 @@ int main()
         }
     }
 
-    // An invalid image leaves a range-only frame and is still reported; beginFrame asks only for range.
+    // A narrow image is fitted and published beside the range, and still reported.
     {
         TrackedContextSource storage;
         GoPxLSdk::GoDataSet dataSet;
@@ -1198,17 +1269,11 @@ int main()
         GocatorImageRejection imageRejection;
         const auto converted = adapter.convertFrameWithRejection(
             dataSet, allRequest, storage, rejection, &imageRejection);
-        assert(converted && converted->images().empty() && converted->ranges().size() == 1U);
-        GraphicsRangeFrameLayout expectedLayout;
-        expectedLayout.width = 1;
-        expectedLayout.height = 1;
-        const auto expectedPlan = planGraphicsRangeWrite(expectedLayout);
-        assert(expectedPlan.hasValue());
-        assert(storage.calls == 1U && storage.reserveCalls == 1U
-            && storage.requestedBytes == expectedPlan.value().totalBytes
-            && storage.usedBytes == expectedPlan.value().totalBytes);
+        assert(converted && converted->images().size() == 1U && converted->ranges().size() == 1U);
+        assert(storage.calls == 1U && storage.reserveCalls == 2U
+            && storage.usedBytes == storage.requestedBytes);
         assert(imageRejection.reason == GraphicsImageFailure::StrideBelowMinimum);
-        assert(rejection.rangeRetained && !rejection.imageRetained);
+        assert(rejection.rangeRetained && rejection.imageRetained);
     }
 
     // A refused context for a range plus image frame drops the whole frame before any reserve.
@@ -1291,6 +1356,154 @@ int main()
         assert(frame.validMask.empty());
         assert(frame.zValues[0] == 5.0F);
         assert(frame.zValues[1] == 6.0F);
+    }
+
+    // Short image buffer: planned at the declared size, the bytes that exist are copied, the rest is
+    // zero-filled (the test storage is poisoned), and the shortfall is counted.
+    {
+        TrackedContextSource storage;
+        GoPxLSdk::GoDataSet dataSet;
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImageBuffer(*image, 2, 2, GoPxLSdk::GoGdpPixelFormat::Mono8,
+            1U, 2U, std::vector<k8u>{1, 2, 3, 4});
+        GoGdpMsgTests::setImageHeight(*image, 3);
+        dataSet.Add(image);
+        GraphicsFrameRequest request;
+        request.components = GraphicsFrameComponent::Image;
+        GocatorImageRejection evidence;
+        GocatorFrameAnomalies anomalies;
+        const auto frame = adapter.convertFrameWithRejection(
+            dataSet, request, storage, rejection, &evidence, std::nullopt, nullptr, nullptr, &anomalies);
+        assert(frame && frame->images().size() == 1U);
+        const auto& fitted = frame->images().front().payload;
+        assert(fitted.width == 2 && fitted.height == 3 && fitted.stride == 2 && fitted.pixels.size() == 6U);
+        const std::uint8_t expected[] = {1, 2, 3, 4, 0, 0};
+        for (std::size_t index = 0; index < 6U; ++index) assert(fitted.data()[index] == expected[index]);
+        assert(evidence.reason == GraphicsImageFailure::TruncatedBytes);
+        assert(evidence.readableBytes == 4U && evidence.requiredBytes == 6U && evidence.imageRetained);
+        assert(anomalies.imageCount == 1U && anomalies.rangeCount == 0U);
+        assert(storage.requestedBytes == 6U && storage.usedBytes == 6U);
+    }
+
+    // A short sample array is planned at its declared size: the samples that exist convert, the rest
+    // is zero and marked invalid.
+    {
+        TrackedContextSource storage;
+        GoPxLSdk::GoDataSet dataSet;
+        auto profile = std::make_shared<GoPxLSdk::GoGdpProfileUniform>();
+        GoGdpMsgTests::setUniformProfile(*profile, 2,
+            {0.0, 0.0, 1.0}, {0.0, 0.0, 0.0}, {5, 6});
+        GoGdpMsgTests::setUniformProfileWidth(*profile, 4);
+        dataSet.Add(profile);
+        GocatorFrameAnomalies anomalies;
+        const auto frame = adapter.convertFrameWithRejection(
+            dataSet, rangeRequest, storage, rejection, nullptr, std::nullopt, nullptr, nullptr, &anomalies);
+        assert(frame && frame->ranges().size() == 1U);
+        const RangeFrame& fitted = frame->ranges().front().payload;
+        assert(fitted.width == 4 && fitted.height == 1);
+        expectArray(fitted.zValues, {5.0F, 6.0F, 0.0F, 0.0F}, "short profile Z");
+        expectMask(fitted.validMask, {1U, 1U, 0U, 0U});
+        assert(anomalies.rangeCount == 1U && anomalies.ranges[0].reason == Rejection::TruncatedData);
+        assert(anomalies.ranges[0].frameRetained && anomalies.ranges[0].rangeRetained);
+    }
+
+    // Declared dimensions of zero with data present fit the delivered array instead of dropping it.
+    {
+        TrackedContextSource storage;
+        GoPxLSdk::GoDataSet dataSet;
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        GoGdpMsgTests::setUniformSurface(*surface, 2, 1,
+            {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {7, 8}, {});
+        GoGdpMsgTests::setSurfaceWidth(*surface, 0);
+        dataSet.Add(surface);
+        GocatorFrameAnomalies anomalies;
+        const auto frame = adapter.convertFrameWithRejection(
+            dataSet, rangeRequest, storage, rejection, nullptr, std::nullopt, nullptr, nullptr, &anomalies);
+        assert(frame && frame->ranges().size() == 1U);
+        assert(frame->ranges().front().payload.width == 2 && frame->ranges().front().payload.height == 1);
+        expectArray(frame->ranges().front().payload.zValues, {7.0F, 8.0F}, "array-sized surface Z");
+        assert(anomalies.rangeCount == 1U && anomalies.ranges[0].reason == Rejection::InvalidDimensions);
+    }
+
+    // Sample arrays of an item size the adapter cannot interpret publish their bytes as raw Mono8.
+    {
+        TrackedContextSource storage;
+        GoPxLSdk::GoDataSet dataSet;
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        GoGdpMsgTests::setUniformSurfaceInt32(*surface, 2, 1, {100, 200});
+        dataSet.Add(surface);
+        GocatorFrameAnomalies anomalies;
+        const auto frame = adapter.convertFrameWithRejection(
+            dataSet, rangeRequest, storage, rejection, nullptr, std::nullopt, nullptr, nullptr, &anomalies);
+        assert(frame && frame->ranges().empty() && frame->images().size() == 1U);
+        const auto& raw = frame->images().front().payload;
+        assert(raw.pixelFormat == GraphicsImagePixelFormat::Mono8);
+        assert(raw.width == 8 && raw.height == 1 && raw.pixels.size() == 8U);
+        assert(raw.data()[0] == 100U && raw.data()[4] == 200U);
+        assert(rejection.reason == Rejection::UnsupportedFormat && rejection.imageRetained);
+        assert(anomalies.rangeCount == 1U);
+    }
+
+    // One bad part never removes another: parts without any bytes are absent and counted, every
+    // other part publishes.
+    {
+        TrackedContextSource storage;
+        GoPxLSdk::GoDataSet dataSet;
+        dataSet.Add(stamp(5));
+        dataSet.Add(std::make_shared<GoPxLSdk::GoGdpImage>());
+        auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+        GoGdpMsgTests::setImage(*image, 1, 1, GoPxLSdk::GoGdpPixelFormat::Mono8, std::vector<k8u>{9});
+        dataSet.Add(image);
+        dataSet.Add(std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>());
+        auto surface = std::make_shared<GoPxLSdk::GoGdpSurfaceUniform>();
+        GoGdpMsgTests::setUniformSurface(*surface, 1, 1,
+            {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0}, {3}, {});
+        dataSet.Add(surface);
+        GraphicsFrameRequest allRequest;
+        allRequest.components = GraphicsFrameComponent::All;
+        GocatorImageRejection imageEvidence;
+        GocatorFrameAnomalies anomalies;
+        const auto frame = adapter.convertFrameWithRejection(
+            dataSet, allRequest, storage, rejection, &imageEvidence, std::nullopt, nullptr, nullptr, &anomalies);
+        assert(frame && frame->images().size() == 1U && frame->ranges().size() == 1U);
+        assert(frame->images().front().payload.data()[0] == 9U);
+        assert(anomalies.imageCount == 2U);
+        assert(anomalies.images[0].reason == GraphicsImageFailure::InvalidDimensions);
+        assert(anomalies.images[1].reason == GraphicsImageFailure::MissingBytes);
+        assert(anomalies.rangeCount == 2U);
+        assert(anomalies.ranges[0].reason == Rejection::InvalidDimensions && anomalies.ranges[0].part == 3U);
+        assert(anomalies.ranges[1].reason == Rejection::MissingData && anomalies.ranges[1].partCount == 5U);
+        assert(anomalies.ranges[1].frameRetained && anomalies.ranges[1].imageRetained
+            && anomalies.ranges[1].rangeRetained);
+    }
+
+    // Parts that cannot be sensibly interpreted still publish, and the per-frame anomaly record is
+    // fixed-capacity: observations beyond it are counted per reason instead of allocating.
+    {
+        TrackedContextSource storage;
+        GoPxLSdk::GoDataSet dataSet;
+        for (int index = 0; index < 10; ++index) {
+            auto image = std::make_shared<GoPxLSdk::GoGdpImage>();
+            GoGdpMsgTests::setImage(*image, 1, 1, GoPxLSdk::GoGdpPixelFormat::Null_Format,
+                std::vector<k8u>{static_cast<k8u>(index)});
+            dataSet.Add(image);
+        }
+        GraphicsFrameRequest request;
+        request.components = GraphicsFrameComponent::Image;
+        GocatorFrameAnomalies anomalies;
+        const auto frame = adapter.convertFrameWithRejection(
+            dataSet, request, storage, rejection, nullptr, std::nullopt, nullptr, nullptr, &anomalies);
+        assert(frame && frame->images().size() == 8U);
+        assert(frame->images().front().descriptor.id == "image");
+        std::string lastId;
+        for (const auto& resource : frame->images()) lastId = resource.descriptor.id;
+        assert(lastId == "image-8");
+        assert(anomalies.imageCount == GocatorFrameAnomalies::capacity);
+        const auto overflowOf = [&](const GraphicsImageFailure reason) {
+            return anomalies.imageOverflowByReason[static_cast<std::size_t>(reason)];
+        };
+        assert(overflowOf(GraphicsImageFailure::UnsupportedFormat) == 2U);
+        assert(overflowOf(GraphicsImageFailure::ExtentOverflow) == 2U);
     }
 
     return 0;
