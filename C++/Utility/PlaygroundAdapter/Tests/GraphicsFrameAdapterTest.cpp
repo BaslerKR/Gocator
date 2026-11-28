@@ -1,3 +1,8 @@
+// This suite checks its results with assert(); Release configurations must not compile them out.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include "GocatorDataSetGraphicsFrameAdapter.h"
 #include "GocatorRangeConversion.h"
 #include "Internal/GocatorSdkRuntime.h"
