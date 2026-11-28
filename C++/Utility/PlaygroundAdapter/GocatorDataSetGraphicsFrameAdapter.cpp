@@ -1018,26 +1018,28 @@ std::optional<GraphicsFrame> GocatorDataSetGraphicsFrameAdapter::convertGraphics
     if (!rangePlan && !imageLayout) return std::nullopt;
 
     // Plan the exact destination footprint in real reserve order: image first, then range.
+    // A part whose size cannot be added to the frame total is skipped with its diagnostic; the
+    // other part still publishes. This is a property of the part, not a storage refusal.
     std::size_t sampleBytes = 0U;
     if (imageLayout) {
         if (!appendAligned(sampleBytes, imageWriteLayout.bytes, imageWriteLayout.alignment)) {
-            if (storageError) *storageError = GraphicsFrameError::Capacity;
             reportImageFailure(*imageMessage, GraphicsImageFailure::ExtentOverflow, &*imageLayout);
-            return std::nullopt;
+            imageLayout.reset();
+            imageMessage = nullptr;
         }
     }
     if (rangePlan) {
         if (!appendAligned(sampleBytes, rangePlan->writePlan.totalBytes, rangePlan->writePlan.alignment)) {
-            if (storageError) *storageError = GraphicsFrameError::Capacity;
             if (rejection) {
                 rejection->reason = RangeReason::SizeLimitExceeded;
                 rejection->width = static_cast<std::uint32_t>(rangePlan->width);
                 rejection->height = static_cast<std::uint32_t>(rangePlan->height);
                 rejection->part = static_cast<std::uint32_t>(rangeIndex);
             }
-            return std::nullopt;
+            rangePlan.reset();
         }
     }
+    if (!rangePlan && !imageLayout) return std::nullopt;
 
     if (cancelled && cancelled->load(std::memory_order_acquire)) {
         if (storageError) *storageError = GraphicsFrameError::Disconnected;

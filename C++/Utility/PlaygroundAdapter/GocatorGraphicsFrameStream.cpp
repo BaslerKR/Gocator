@@ -51,7 +51,6 @@ private:
     StorageOutcome _storageOutcome;
     std::shared_ptr<const std::atomic<bool>> _externalCancelled;
     std::atomic<bool> _localCancelled{false};
-    std::atomic<bool> _stickyRefused{false};
     GocatorDataSetGraphicsFrameAdapter _adapter;
     GraphicsFrameCallbackGate _callbackGate;
     Gocator::CallbackId _grabCallbackId = 0;
@@ -89,7 +88,7 @@ GocatorGraphicsFrameStream::Impl::Impl(
             const GoPxLSdk::GoDataSet& dataSet, const std::size_t sequence) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
             if (!lease) return;
-            if (isCancelled() || _stickyRefused.load(std::memory_order_acquire))
+            if (isCancelled())
             {
                 return;
             }
@@ -102,11 +101,6 @@ GocatorGraphicsFrameStream::Impl::Impl(
                 auto frame = _adapter.convertFrameWithRejection(
                     dataSet, gocatorGraphicsFrameRequest(), *_contextSource,
                     rejection, &imageRejection, sequence, &storageError, activeCancel);
-                if (storageError == GraphicsFrameError::ClassRefused
-                    || storageError == GraphicsFrameError::Capacity)
-                {
-                    _stickyRefused.store(true, std::memory_order_release);
-                }
                 if (storageError != GraphicsFrameError::None && _storageOutcome)
                 {
                     _storageOutcome(storageError);

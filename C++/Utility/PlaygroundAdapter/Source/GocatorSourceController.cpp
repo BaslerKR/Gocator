@@ -375,29 +375,7 @@ GocatorSourceController::activeContextSource(std::string* error) const
         if (error) *error = "Frame context source is not configured.";
         return {};
     }
-    if (state->stickyError.load(std::memory_order_acquire) != GraphicsFrameError::None) {
-        std::lock_guard<std::mutex> stateLock(state->mutex);
-        if (error) {
-            const auto err = state->stickyError.load(std::memory_order_acquire);
-            *error = state->stickyMessage.empty() ? contextErrorMessage(err) : state->stickyMessage;
-        }
-        return {};
-    }
     return state;
-}
-
-void GocatorSourceController::recordStickyContextFailure(
-    const std::shared_ptr<ContextSourceState>& state,
-    const GraphicsFrameError error,
-    std::string message)
-{
-    if (!state || (error != GraphicsFrameError::ClassRefused && error != GraphicsFrameError::Capacity))
-        return;
-    std::lock_guard<std::mutex> stateLock(state->mutex);
-    if (state->stickyError.load(std::memory_order_acquire) == GraphicsFrameError::None) {
-        state->stickyMessage = message.empty() ? contextErrorMessage(error) : std::move(message);
-        state->stickyError.store(error, std::memory_order_release);
-    }
 }
 
 bool GocatorSourceController::isConnectedForGrab() const
@@ -453,10 +431,12 @@ void GocatorSourceController::rebuildGraphicsStream(const std::shared_ptr<Acquis
         }
         if (err == GraphicsFrameError::ClassRefused || err == GraphicsFrameError::Capacity) {
             _droppedFrames.fetch_add(1, std::memory_order_relaxed);
+            // Only this frame is dropped; acquisition keeps running and the next frame asks again.
+            // The log line is surfaced once per run.
             auto message = contextErrorMessage(err);
-            recordStickyContextFailure(run->contextState, err, message);
             noteSingleStorageFailure(run->generation, message);
-            Gocator::syslog("Gocator frame storage refused: " + message, true);
+            if (!run->refusalLogged.exchange(true, std::memory_order_acq_rel))
+                Gocator::syslog("Gocator frame storage refused: " + message, true);
             return;
         }
         if (err == GraphicsFrameError::Allocation) {

@@ -101,7 +101,7 @@ private slots:
     void singleStopFailureIsNotSuccess_data();
     void frameContextRequiredWithoutFallback();
     void frameContextTransactionAndNoReadyCreditDrop();
-    void frameContextClassRefusedIsSticky();
+    void frameContextRefusalDropsOnlyThatFrame();
     void cancellationOrStopReleasesOpenBuilder();
     void stopAndRearmIgnoresLateCallbackFromOldRun();
 
@@ -1268,7 +1268,7 @@ void GocatorConnectionControlTests::frameContextTransactionAndNoReadyCreditDrop(
     QCOMPARE(source->liveAllocations.load(), std::size_t{0});
 }
 
-void GocatorConnectionControlTests::frameContextClassRefusedIsSticky()
+void GocatorConnectionControlTests::frameContextRefusalDropsOnlyThatFrame()
 {
     Gocator gocator;
     GocatorSourceController controller(&gocator);
@@ -1295,35 +1295,43 @@ void GocatorConnectionControlTests::frameContextClassRefusedIsSticky()
     GoPxLSdk::GoDataSet dataSet;
     dataSet.Add(GoGdpMsgTests::monoPixel());
 
-    // First dataset hits ClassRefused; second dataset in the same run must not retry beginFrame.
+    // The first dataset hits ClassRefused and is dropped and counted; the next dataset in the
+    // same run asks the source again and publishes.
     gocator.receiveDataForTest(dataSet);
-    const std::size_t callsAfterFirst = source->calls.load();
-    QCOMPARE(callsAfterFirst, std::size_t{1});
+    QCOMPARE(source->calls.load(), std::size_t{1});
+    QCOMPARE(delivered.load(), std::size_t{0});
+    QCOMPARE(controller._droppedFrames.load(), std::uint64_t{1});
     source->nextError.store(GraphicsFrameError::None, std::memory_order_release);
     gocator.receiveDataForTest(dataSet);
-    QCOMPARE(source->calls.load(), callsAfterFirst);
+    QCOMPARE(source->calls.load(), std::size_t{2});
+    QCOMPARE(delivered.load(), std::size_t{1});
 
     grabbing.store(false);
     gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
-    const auto refused = singleFuture.get();
+    const auto accepted = singleFuture.get();
+    QCOMPARE(accepted.error, DeviceConnectionError::None);
+
+    // A Single whose only dataset was refused reports the refusal; it does not latch, so the
+    // following Single asks the source again and succeeds.
+    source->nextError.store(GraphicsFrameError::Capacity, std::memory_order_release);
+    auto refusedPromise = std::make_shared<std::promise<DeviceConnectionResult>>();
+    auto refusedFuture = refusedPromise->get_future();
+    QCOMPARE(controller.requestSingle(connectionId, [refusedPromise](DeviceConnectionResult result) {
+        refusedPromise->set_value(std::move(result));
+    }).error, DeviceConnectionError::None);
+    QTRY_VERIFY(controller._singleInFlight.load());
+    QTRY_VERIFY(grabbing.load());
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
+    gocator.receiveDataForTest(dataSet);
+    grabbing.store(false);
+    gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
+    const auto refused = refusedFuture.get();
     QCOMPARE(refused.error, DeviceConnectionError::BackendFailure);
-    QVERIFY(refused.message.find("class refused") != std::string::npos);
-    QCOMPARE(delivered.load(), std::size_t{0});
+    QVERIFY(!refused.message.empty());
+    QCOMPARE(delivered.load(), std::size_t{1});
 
-    // Subsequent Single, LiveStart, and start() stay refused without touching beginFrame.
-    int completions = 0;
-    QCOMPARE(controller.requestSingle(connectionId, [&](auto) { ++completions; }).error,
-        DeviceConnectionError::BackendFailure);
-    QCOMPARE(controller.requestLiveStart(connectionId, [&](auto) { ++completions; }).error,
-        DeviceConnectionError::BackendFailure);
-    QCOMPARE(completions, 0);
-    bool startThrew = false;
-    try { controller.start(); } catch (const std::runtime_error&) { startThrew = true; }
-    QVERIFY(startThrew);
-    QCOMPARE(source->calls.load(), callsAfterFirst);
+    source->nextError.store(GraphicsFrameError::None, std::memory_order_release);
 
-    // Injecting a fresh context source clears the sticky refusal and succeeds.
-    controller.setFrameContextSource(std::make_shared<GraphicsLocalFrameContextSource>());
     auto okPromise = std::make_shared<std::promise<DeviceConnectionResult>>();
     auto okFuture = okPromise->get_future();
     QCOMPARE(controller.requestSingle(connectionId, [okPromise](DeviceConnectionResult result) {
@@ -1332,14 +1340,12 @@ void GocatorConnectionControlTests::frameContextClassRefusedIsSticky()
     QTRY_VERIFY(controller._singleInFlight.load());
     QTRY_VERIFY(grabbing.load());
     gocator.notifyStatusForTest(Gocator::GrabbingStatus, true);
-    GoPxLSdk::GoDataSet secondDataSet;
-    secondDataSet.Add(GoGdpMsgTests::monoPixel());
-    gocator.receiveDataForTest(secondDataSet);
+    gocator.receiveDataForTest(dataSet);
     grabbing.store(false);
     gocator.notifyStatusForTest(Gocator::GrabbingStatus, false);
     const auto ok = okFuture.get();
     QCOMPARE(ok.error, DeviceConnectionError::None);
-    QCOMPARE(delivered.load(), std::size_t{1});
+    QCOMPARE(delivered.load(), std::size_t{2});
 }
 
 void GocatorConnectionControlTests::cancellationOrStopReleasesOpenBuilder()

@@ -225,22 +225,16 @@ private:
 
     struct ContextSourceState {
         std::shared_ptr<GraphicsFrameContextSource> source;
-        mutable std::mutex mutex;
-        std::atomic<GraphicsFrameError> stickyError{GraphicsFrameError::None};
-        std::string stickyMessage;
     };
     struct AcquisitionRun {
         std::uint64_t generation = 0;
         std::atomic<bool> active{true};
         std::atomic<bool> cancelled{false};
+        std::atomic<bool> refusalLogged{false};
         std::shared_ptr<ContextSourceState> contextState;
     };
 
     [[nodiscard]] std::shared_ptr<ContextSourceState> activeContextSource(std::string* error) const;
-    static void recordStickyContextFailure(
-        const std::shared_ptr<ContextSourceState>& state,
-        GraphicsFrameError error,
-        std::string message);
     [[nodiscard]] bool isConnectedForGrab() const;
     void revokeActiveRun();
     void rebuildGraphicsStream(const std::shared_ptr<AcquisitionRun>& run);
